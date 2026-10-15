@@ -58,16 +58,16 @@ class ScanLeftoverMarkersTests(unittest.TestCase):
         text = "line one\n- **Host:** [[HOST]]\n[[TODO: text]]\n\n[[NOTE: never closed\n"
         hits = compile.scan_leftover_markers("findings/F-001-x.md", text)
         self.assertEqual(hits, [
-            ("findings/F-001-x.md", 2, "[[HOST]]"),
-            ("findings/F-001-x.md", 3, "[[TODO:"),
-            ("findings/F-001-x.md", 5, "[[NOTE:"),
+            ("findings/F-001-x.md", 2, "[[HOST"),
+            ("findings/F-001-x.md", 3, "[[TODO"),
+            ("findings/F-001-x.md", 5, "[[NOTE"),
         ])
 
-    def test_bash_test_and_bare_name_not_reported(self):
-        # A bare `[[HOST` has no `:` or `]]`, so the spec regex can't see it;
-        # the manual `grep -F '[['` sweep in checklists/50 covers it.
+    def test_bare_name_reported_and_bash_test_not(self):
+        # A bare `[[HOST` (no `:` or `]]`) is still an unfinished marker, so it
+        # must count; a bash test has a space after `[[` and is not a marker.
         text = "if [[ -f x ]]; then\n[[HOST\n"
-        self.assertEqual(compile.scan_leftover_markers("f.md", text), [])
+        self.assertEqual(compile.scan_leftover_markers("f.md", text), [("f.md", 2, "[[HOST")])
 
     def test_count_equals_regex_hits(self):
         text = "[[DATE]] [[TIME]]\n[[CHOOSE: a / b]] and [[ -f x ]]\n"
@@ -129,6 +129,12 @@ class ResolveInRootTests(unittest.TestCase):
         (self.root / "latest").symlink_to(self.root / "findings")
         resolved = compile.resolve_in_root(self.root, "latest/F-001-x.md")
         self.assertEqual(resolved, self.root.resolve() / "findings" / "F-001-x.md")
+
+    def test_absolute_path_inside_root_passes(self):
+        # A real `--index ~/cptc-work/tracker/findings-index.csv` is absolute
+        # once ~ is expanded, and must be allowed when it is inside the root.
+        index = self.root.resolve() / "tracker" / "findings-index.csv"
+        self.assertEqual(compile.resolve_in_root(self.root, index), index)
 
     def test_dot_dot_part_is_refused(self):
         with self.assertRaisesRegex(compile.RootError, re.escape("../x")):

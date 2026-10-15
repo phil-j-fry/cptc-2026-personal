@@ -57,4 +57,5 @@ __pycache__/
 # Fake test data for tools/ must stay tracked
 !tools/tests/fixtures/
 !tools/tests/fixtures/**
+# Test scratch folder: never tracked
 tools/tests/.tmp/

@@ -30,14 +30,14 @@ from pathlib import Path
 # stops matching at the next marker instead of swallowing it.
 MARKER_RE = re.compile(r"\[\[[A-Z_]+(?::(?:(?!\[\[).)*?)?\]\]", re.DOTALL)
 
-# The start of a leftover marker: `[[`, a capitalised name, then `:` or `]]`.
-# This is the exact pattern from the grep in checklists/50-report-qa.md, so the
-# tool and the manual check agree. Why two regexes: MARKER_RE needs a whole
-# marker so it can strip it; this one needs only the start, so it also reports
-# a marker whose `]]` is missing (e.g. `[[NOTE: never closed`).
-# Limit: a bare `[[HOST` with no `:` or `]]` is not caught. The manual
-# `grep -rnF '[['` sweep in checklists/50-report-qa.md covers that case.
-LEFTOVER_RE = re.compile(r"\[\[[A-Z_]+(:|\]\])")
+# The start of a leftover marker: `[[` followed by a capitalised name. This is
+# the same pattern as the grep in checklists/50-report-qa.md, so the tool and
+# the manual check agree. Why two regexes: MARKER_RE needs a whole marker so
+# it can strip it; this one needs only the start, so it also reports a marker
+# whose `]]` is missing (e.g. `[[NOTE: never closed`, or a bare `[[HOST`).
+# Catching every unfinished marker is what lets a READY finding be trusted.
+# A bash test like `[[ -f x ]]` has a space after `[[`, so it isn't reported.
+LEFTOVER_RE = re.compile(r"\[\[[A-Z_]+")
 
 
 def strip_markers(text):
@@ -89,7 +89,7 @@ def parse_args(argv=None):
         "--index",
         type=expand_path,
         default=None,
-        help="the findings index CSV (default: <root>/tracker/findings-index.csv)",
+        help="the findings index CSV; a relative path is taken from the root (default: <root>/tracker/findings-index.csv)",
     )
     parser.add_argument(
         "--final",

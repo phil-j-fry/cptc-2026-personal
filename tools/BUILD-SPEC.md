@@ -61,7 +61,7 @@ This is a handoff brief for a Claude Code session (or a teammate) building two s
 - `build/interactions-timeline.md`: the report's Section 7 table (`Time | Type | Summary | Reference`), one row per `IR-`, `SU-` and `INJ-` file found in `field-notes/*/` and `incoming/*/field-notes/*/` (only these three types; there is no separate client-request type), sorted by time. Type comes from the filename prefix (Incident / Status update / Inject). Time comes from the file's own labelled line: `- **Time reported:**` (IR), `- **Time:**` (SU), `- **Sent:**` (INJ), each holding a date and time. A value matching `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$` is sorted as text, which also sorts it by time; any other value, a leftover marker included, sorts last with a warning. Summary is the file's `#` heading exactly as written; Reference is the filename without `.md`. This replaces any separate interaction tracker.
 - `build/findings-combined.md`: all findings concatenated in that order, ready to paste into Section 5. Headings are left as written: the templates already use `###`/`####`, which nest correctly under Section 5. Warn if a finding's title isn't a `###` heading.
 - `build/qa-report.txt`, the QA results. Each check is PASS/FAIL with file:line:
-    - leftover markers (warning in draft mode, error in `--final`): regex `\[\[[A-Z_]+(:|\]\])`
+    - leftover markers (warning in draft mode, error in `--final`): regex `\[\[[A-Z_]+` (catches an unclosed or bare marker such as `[[HOST` too)
     - older-style leftovers: `<<`, `TODO`, `F-XXX`, `IR-XXX`, `\bXX\b`, `YYYY`, `HH:MM`. These are **warnings even in `--final`** (they can appear legitimately), and the check skips fenced code blocks and backtick spans. A `TODO` inside a `[[TODO: …]]` marker is not reported here (the marker check covers it); every other pattern still warns inside markers
     - duplicate finding IDs across `findings/` and `incoming/*/findings/` (any two files with the same ID)
     - IDs missing from, or extra to, `findings-index.csv`, matched on its `finding_id` column (skip if the file is absent)
@@ -199,7 +199,8 @@ Manual test checklist in `tools/README.md`.
 Resolved open questions folded into this spec on 2026-10-15. The full decisions are in the `dev-tasks` note.
 
 - **2026-10-15 process:** tests write temporary files only under `tools/tests/.tmp/` (gitignored) and may delete only their own files there (Tool 1 Tests).
-- **2026-10-15 path-safety (C-03):** `..` is checked as a whole path part, so `a..b.md` is a valid filename; every path is still resolved and must stay inside the root (Constraint 4). Manager decision, to be confirmed by the user at M1.
+- **2026-10-15 path-safety (C-03):** `..` is checked as a whole path part, so `a..b.md` is a valid filename; every path is still resolved and must stay inside the root (Constraint 4). Confirmed by the user at M1.
+- **2026-10-15 M1 (CR-1):** the leftover-marker regex is widened to `\[\[[A-Z_]+` so a bare `[[HOST` is caught and READY can be trusted; the `checklists/50-report-qa.md` grep uses the same regex (Tool 1 QA).
 - **OQ-01 (2026-10-15):** status-update and inject-response times gain a date; timeline times must match `YYYY-MM-DD HH:MM`, otherwise sort last with a warning (interactions timeline, Deliverables).
 - **OQ-02 (2026-10-15):** a `TODO` inside a `[[TODO: …]]` marker isn't reported by the older-style check; other patterns still are (Tool 1 QA).
 - **OQ-03 (2026-10-15):** an edited library-finding title replaces only the first heading's title and gives the slug (Tool 2 New file).

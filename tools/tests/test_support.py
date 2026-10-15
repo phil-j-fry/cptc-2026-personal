@@ -6,6 +6,13 @@ import unittest
 import support
 
 
+def finding_structure(text):
+    """Return the set of `####` headings and `- **Label:**` labels in a finding."""
+    headings = re.findall(r"(?m)^#### .+$", text)
+    labels = re.findall(r"(?m)^- \*\*[^*]+:\*\*", text)
+    return set(headings + labels)
+
+
 class MakeWorktreeTests(unittest.TestCase):
     def test_root_is_inside_tmp_without_git(self):
         root = support.make_worktree(self)
@@ -54,6 +61,17 @@ class MakeCompleteFindingTests(unittest.TestCase):
         expected = re.findall(r"(?m)^ +Expected: \S", text)
         self.assertGreaterEqual(len(numbered), 1)
         self.assertGreaterEqual(len(expected), len(numbered))
+
+    def test_matches_finding_template_structure(self):
+        # The template is edited by hand, outside the build workflow, so this
+        # is what notices when COMPLETE_FINDING goes stale. Attack chain is
+        # left out on purpose: COMPLETE_FINDING drops it as a standalone finding.
+        template_path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        template = finding_structure(template_path.read_text(encoding="utf-8"))
+        template.discard("#### Attack chain")
+        complete = finding_structure(support.COMPLETE_FINDING)
+        self.assertEqual(sorted(template - complete), [], "missing from COMPLETE_FINDING")
+        self.assertEqual(sorted(complete - template), [], "extra in COMPLETE_FINDING")
 
     def test_id_and_title_are_used(self):
         text = support.make_complete_finding("F-002", "Second example")

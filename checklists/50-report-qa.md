@@ -5,7 +5,7 @@
 ## 1. Leftovers (zero hits allowed)
 - [ ] If `tools/compile.py` is built, run `python3 tools/compile.py --final` first. It covers the Markdown files; the exported file and the manual items below still apply.
 - [ ] Run these from inside `~/cptc-work`.
-- [ ] No template markers remain: `grep -rnE '\[\[[A-Z_]+(:|\]\])' report.md findings/ incoming/*/findings/` returns nothing
+- [ ] No template markers remain: `grep -rnE '\[\[[A-Z_]+' report.md findings/ incoming/*/findings/` returns nothing
 - [ ] Broad sweep: in `grep -rnF '[[' report.md findings/ incoming/*/findings/`, every hit must be real content in evidence (e.g. a bash `[[ -f x ]]` test), not a marker
 - [ ] Older-style leftovers: `grep -rnE '<<|TODO|F-XXX|IR-XXX|\bXX\b|YYYY|HH:MM' report.md findings/ incoming/*/findings/` returns nothing, apart from expected hits such as a `<<EOF` heredoc inside evidence. (`\bXX\b` skips "XXE".)
 - [ ] In the exported file, search (Ctrl-F) for `[[`, `XX` and `TODO`
