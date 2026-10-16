@@ -22,9 +22,11 @@ These rules apply to every agent session working in this repo (App Dev Manager, 
 4. **At the end of each review chunk** (listed in `dev-tasks`), the implementor asks the **code reviewer** to review the whole chunk. The reviewer either requests changes or approves. The implementor applies any requested changes (rule 3 applies).
    - **Breakdown doc:** at the end of each chunk, the implementor also updates `tools/<tool>-breakdown.md` (`compile-breakdown.md`, and from Chunk N1 `notebook-breakdown.md`). The code reviewer checks it against the code before approving.
    - The breakdown doc has four sections: the tool's code; the test helpers in `tests/support.py` (the notebook doc links to the compile doc's helper section rather than repeating it); the tests; and related edits outside `tools/`.
-   - Each entry gives the function name with its line range, a short description, and "If Operations asks, a student can say: …".
+   - Each entry gives the function name with its line range, a short description, and "If Operations asks: …".
+   - Follow the format of the current `compile-breakdown.md`: test entries as bullets, tables where they help, a glossary, and "Why" / "Limit" lines where relevant.
 5. **App Dev Manager** confirms each task is done (tests pass, acceptance check met), then ticks its box in `dev-tasks`. Any issue that needs the user goes to the user through App Dev Manager.
-6. **Git belongs to the user.** No agent or session runs `git commit` or `git push` unless the user asks for it (ground rule 5). A finished task or chunk is left uncommitted in the working tree for the user.
+6. **App Dev Manager keeps the `manager-handoff` note current** (at every user stop, after every decision, and on "save context" / "prep handoff"). A new App Dev Manager starts by following that note's startup steps, including checking the canvas ropes against its Canvas map.
+7. **Git belongs to the user.** No agent or session runs `git commit` or `git push` unless the user asks for it (ground rule 5). A finished task or chunk is left uncommitted in the working tree for the user.
 
 ## User review stops
 
@@ -36,7 +38,12 @@ These rules apply to every agent session working in this repo (App Dev Manager, 
    - **the tests:** summarized ("these tests prove X"), with detail only when the user asks
 3. feature-review sends App Dev Manager one numbered change list. The change requests go through the normal workflow above.
 4. The user commits the chunk (one commit per stop, conventional style: `feat:`, `test:`, `docs:`). Agents never commit.
-5. **No building ahead:** no work on the next chunk starts until the user says go.
+5. **Closeout and session refresh** (after the commit, before the next chunk), run by App Dev Manager:
+   - Ask the implementor, adversary, code reviewer and feature-review what they learned that is not already written down. Save what's worth keeping in the `team-lessons` note, which every agent reads at session start.
+   - Record each agent's session ID in `manager-handoff`, so any old session can be resumed with `claude --resume <id>` / `codex resume <id>`.
+   - Reset those four agents **in place**: `/clear` for Claude, `maestri recruit --replace` for Codex. Never dismiss them, which would delete their ropes. Then brief each one: "You are <role>. Read agents.md, team-lessons, and dev-tasks."
+   - The task-planner is not reset. App Dev Manager resets itself when its context gets full or at milestones, using `manager-handoff`.
+6. **No building ahead:** no work on the next chunk starts until the user says go.
 
 ### Milestones
 
