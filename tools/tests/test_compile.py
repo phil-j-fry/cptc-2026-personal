@@ -157,5 +157,371 @@ class ResolveInRootTests(unittest.TestCase):
             compile.resolve_in_root(self.root, "incoming/alice/findings/F-009-y.md")
 
 
+class DiscoverFindingsTests(unittest.TestCase):
+    def test_only_local_and_incoming_findings_returned_in_path_order(self):
+        finding = support.make_complete_finding()
+        root = support.make_worktree(self, {
+            "incoming/bob/findings/F-001-sql-injection.md": finding,
+            "incoming/alice/findings/F-001-default-password.md": finding,
+            "findings/F-001-default-password.md": finding,
+            # Each of these must be left out:
+            "findings/G-001.md": "x\n",
+            "findings/F-002-notes.txt": "x\n",
+            "findings/drafts/F-003-nested.md": "x\n",
+            "incoming/alice/notes/F-004-study.md": "x\n",
+            "incoming/alice/field-notes/alice/NOTE-recon.md": "x\n",
+            "notes/F-005-study.md": "x\n",
+        })
+        found = compile.discover_findings(root)
+        relative = [path.relative_to(root.resolve()).as_posix() for path in found]
+        self.assertEqual(relative, [
+            "findings/F-001-default-password.md",
+            "incoming/alice/findings/F-001-default-password.md",
+            "incoming/bob/findings/F-001-sql-injection.md",
+        ])
+
+    def test_folder_named_like_a_finding_is_skipped(self):
+        root = support.make_worktree(self, {"findings/F-001-x.md/inside.md": "x\n"})
+        self.assertEqual(compile.discover_findings(root), [])
+
+    def test_no_findings_folders_returns_empty_list(self):
+        root = support.make_worktree(self)
+        self.assertEqual(compile.discover_findings(root), [])
+
+    def test_incoming_symlinked_outside_root_is_refused(self):
+        root = support.make_worktree(self, {"findings/F-001-x.md": "x\n"})
+        outside = support.make_worktree(self, {"findings/F-009-y.md": "y\n"})
+        (root / "incoming").mkdir()
+        (root / "incoming" / "alice").symlink_to(outside)
+        with self.assertRaisesRegex(compile.RootError, re.escape("incoming/alice")):
+            compile.discover_findings(root)
+
+    def test_outside_symlink_with_no_findings_is_still_refused(self):
+        # The link must be refused before its target is listed, not only
+        # when a finding happens to be found there.
+        root = support.make_worktree(self)
+        outside = support.make_worktree(self, {"other/readme.md": "y\n"})
+        (root / "incoming").mkdir()
+        (root / "incoming" / "alice").symlink_to(outside)
+        with self.assertRaisesRegex(compile.RootError, re.escape("incoming/alice")):
+            compile.discover_findings(root)
+
+    def test_incoming_entry_symlinked_to_outside_file_is_refused(self):
+        root = support.make_worktree(self)
+        outside = support.make_worktree(self, {"readme.md": "y\n"})
+        (root / "incoming").mkdir()
+        (root / "incoming" / "alice").symlink_to(outside / "readme.md")
+        with self.assertRaisesRegex(compile.RootError, re.escape("incoming/alice")):
+            compile.discover_findings(root)
+
+    def test_findings_folder_symlinked_outside_root_is_refused(self):
+        root = support.make_worktree(self)
+        outside = support.make_worktree(self, {"F-009-y.md": "y\n"})
+        (root / "findings").symlink_to(outside)
+        with self.assertRaisesRegex(compile.RootError, re.escape("findings")):
+            compile.discover_findings(root)
+
+    def test_finding_file_symlinked_outside_root_is_refused(self):
+        root = support.make_worktree(self, {"findings/F-001-x.md": "x\n"})
+        outside = support.make_worktree(self, {"F-009-y.md": "y\n"})
+        (root / "findings" / "F-009-y.md").symlink_to(outside / "F-009-y.md")
+        with self.assertRaisesRegex(compile.RootError, re.escape("F-009-y.md")):
+            compile.discover_findings(root)
+
+    def test_symlink_inside_root_is_allowed(self):
+        root = support.make_worktree(self, {"shared/findings/F-002-y.md": "y\n"})
+        (root / "incoming").mkdir()
+        (root / "incoming" / "bob").symlink_to(root / "shared")
+        found = compile.discover_findings(root)
+        self.assertEqual([path.name for path in found], ["F-002-y.md"])
+
+    def test_incoming_is_not_changed(self):
+        root = support.make_worktree(self, {
+            "incoming/alice/findings/F-001-x.md": support.make_complete_finding(),
+        })
+        incoming = root / "incoming"
+        before = [(path, path.stat().st_mtime_ns) for path in sorted(incoming.rglob("*"))]
+        compile.discover_findings(root)
+        after = [(path, path.stat().st_mtime_ns) for path in sorted(incoming.rglob("*"))]
+        self.assertEqual(after, before)
+
+
+class ParseFindingHeadingTests(unittest.TestCase):
+    def test_filled_heading(self):
+        text = support.make_complete_finding("F-001", "Default admin password on web01")
+        result = compile.parse_finding_heading("findings/F-001-default-password.md", text)
+        self.assertEqual(result, {
+            "id": "F-001",
+            "title": "Default admin password on web01",
+            "line": 1,
+            "heading_markers": 0,
+            "diagnostics": [],
+        })
+
+    def test_marker_heading_uses_filename_id_and_counts_marker(self):
+        text = "### [[FINDING_ID]]: SMB signing not required\n\n- **Severity:** High\n"
+        result = compile.parse_finding_heading("incoming/alice/findings/F-007-smb.md", text)
+        self.assertEqual(result["id"], "F-007")
+        self.assertEqual(result["title"], "SMB signing not required")
+        self.assertEqual(result["heading_markers"], 1)
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_untouched_template_heading(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        result = compile.parse_finding_heading("findings/F-003-x.md", path.read_text(encoding="utf-8"))
+        self.assertEqual(result["id"], "F-003")
+        self.assertEqual(result["title"], "[[FINDING_TITLE]]")
+        self.assertEqual(result["heading_markers"], 2)
+
+    def test_heading_and_filename_mismatch(self):
+        text = support.make_complete_finding("F-002")
+        result = compile.parse_finding_heading("findings/F-001-x.md", text)
+        self.assertEqual(result["id"], "F-002")
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", 1, "heading ID F-002 does not match filename ID F-001"),
+        ])
+
+    def test_two_hashes_instead_of_three(self):
+        text = "Intro line\n## F-001: Default admin password\n"
+        result = compile.parse_finding_heading("findings/F-001-x.md", text)
+        self.assertEqual(result["id"], "F-001")
+        self.assertEqual(result["line"], 2)
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", 2, "title is a ## heading, not ###"),
+        ])
+
+    def test_no_heading_falls_back_to_filename_id(self):
+        result = compile.parse_finding_heading("findings/F-001-x.md", "Default admin password\n")
+        self.assertEqual(result["id"], "F-001")
+        self.assertIsNone(result["title"])
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", 1, "no finding title heading like '### F-NNN: Title'"),
+        ])
+
+    def test_marker_heading_without_filename_id(self):
+        # A library entry such as L03-*.md has no F-NNN in its name.
+        text = "### [[FINDING_ID]]: SMB signing not required\n"
+        result = compile.parse_finding_heading("findings-library/L03-smb.md", text)
+        self.assertIsNone(result["id"])
+        self.assertEqual(result["diagnostics"], [
+            ("findings-library/L03-smb.md", 1, "no finding ID in the heading or the filename"),
+        ])
+
+    def test_windows_line_ending_is_not_part_of_the_title(self):
+        text = "### F-001: Default admin password\r\n- **Severity:** High\r\n"
+        result = compile.parse_finding_heading("findings/F-001-x.md", text)
+        self.assertEqual(result["title"], "Default admin password")
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_four_digit_filename_is_not_read_as_three(self):
+        text = "### [[FINDING_ID]]: x\n"
+        result = compile.parse_finding_heading("findings/F-0012-x.md", text)
+        self.assertIsNone(result["id"])
+
+
+class ParseLabelledFieldsTests(unittest.TestCase):
+    def test_complete_finding_returns_all_six_labels_and_cvss_parts(self):
+        result = compile.parse_labelled_fields("findings/F-001-x.md", support.make_complete_finding())
+        fields = result["fields"]
+        self.assertEqual(sorted(fields), sorted(compile.FIELD_LABELS))
+        self.assertEqual(fields["Severity"], {"value": "Critical", "line": 3})
+        self.assertEqual(fields["CVSS 3.1"]["value"],
+                         "`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8)")
+        self.assertTrue(fields["Why this severity"]["value"].startswith("We logged in"))
+        self.assertEqual(fields["Affected assets"]["value"],
+                         "web01 (10.0.0.1), http://10.0.0.1/login, admin")
+        self.assertEqual(fields["Status"]["value"], "Exploited")
+        self.assertIn("https://example.invalid/", fields["References"]["value"])
+        self.assertEqual(result["cvss_vector"], "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+        self.assertEqual(result["cvss_score"], "9.8")
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_missing_label_is_reported_not_raised(self):
+        text = support.make_complete_finding().replace(
+            "- **Status:** Exploited\n", "")
+        result = compile.parse_labelled_fields("findings/F-001-x.md", text)
+        self.assertNotIn("Status", result["fields"])
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", "Status", "missing labelled line '- **Status:**'"),
+        ])
+
+    def test_extra_whitespace_is_tolerated(self):
+        text = "  -   ** Severity :**   High  \n-\t**Status:**\tConfirmed\n"
+        fields = compile.parse_labelled_fields("f.md", text)["fields"]
+        self.assertEqual(fields["Severity"], {"value": "High", "line": 1})
+        self.assertEqual(fields["Status"], {"value": "Confirmed", "line": 2})
+
+    def test_windows_line_endings_leave_no_carriage_return(self):
+        text = "- **Severity:** High\r\n- **Status:** Confirmed\r\n"
+        fields = compile.parse_labelled_fields("f.md", text)["fields"]
+        self.assertEqual(fields["Severity"], {"value": "High", "line": 1})
+        self.assertEqual(fields["Status"], {"value": "Confirmed", "line": 2})
+
+    def test_untouched_template_keeps_markers_as_written(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        result = compile.parse_labelled_fields("findings/F-001-x.md", path.read_text(encoding="utf-8"))
+        self.assertEqual(result["diagnostics"], [])
+        self.assertEqual(result["fields"]["Severity"]["value"],
+                         "[[CHOOSE: Critical / High / Medium / Low / Informational]]")
+        self.assertEqual(result["cvss_vector"], "[[CVSS_VECTOR]]")
+        self.assertEqual(result["cvss_score"], "[[CVSS_SCORE]]")
+
+    def test_cvss_without_backticks_or_parentheses(self):
+        text = "- **CVSS 3.1:** 9.8\n"
+        result = compile.parse_labelled_fields("f.md", text)
+        self.assertIsNone(result["cvss_vector"])
+        self.assertIsNone(result["cvss_score"])
+
+    def test_score_is_not_read_from_inside_the_vector(self):
+        text = "- **CVSS 3.1:** `CVSS:3.1/AV:N (typo)` (7.5)\n"
+        result = compile.parse_labelled_fields("f.md", text)
+        self.assertEqual(result["cvss_vector"], "CVSS:3.1/AV:N (typo)")
+        self.assertEqual(result["cvss_score"], "7.5")
+
+    def test_empty_file_reports_every_label(self):
+        result = compile.parse_labelled_fields("f.md", "")
+        self.assertEqual([d[1] for d in result["diagnostics"]], compile.FIELD_LABELS)
+
+
+def severity_of(line):
+    """Parse one Severity line the way compile does: label first, then level."""
+    fields = compile.parse_labelled_fields("findings/F-001-x.md", line + "\n")["fields"]
+    return compile.severity_value("findings/F-001-x.md", fields)
+
+
+class SeverityValueTests(unittest.TestCase):
+    def test_filled_level(self):
+        self.assertEqual(severity_of("- **Severity:** High"), ("High", []))
+
+    def test_unfilled_choose_yields_no_severity_and_warns(self):
+        line = "- **Severity:** [[CHOOSE: Critical / High / Medium / Low / Informational]]"
+        self.assertEqual(severity_of(line), (None, [
+            ("findings/F-001-x.md", 1,
+             "no severity (Critical, High, Medium, Low or Informational); sorted last"),
+        ]))
+
+    def test_lowercase_yields_no_severity(self):
+        severity, diagnostics = severity_of("- **Severity:** high")
+        self.assertIsNone(severity)
+        self.assertEqual(len(diagnostics), 1)
+
+    def test_part_of_a_word_does_not_count(self):
+        self.assertIsNone(severity_of("- **Severity:** Highest")[0])
+
+    def test_first_level_wins_and_markers_are_stripped(self):
+        # The library's default Medium, with its NOTE still attached.
+        line = "- **Severity:** Medium [[NOTE: Library default; High if exploited.]]"
+        self.assertEqual(severity_of(line), ("Medium", []))
+        self.assertEqual(severity_of("- **Severity:** Low (was High)")[0], "Low")
+
+    def test_missing_line_is_not_reported_twice(self):
+        # parse_labelled_fields() already reports the missing label.
+        self.assertEqual(compile.severity_value("f.md", {}), (None, []))
+
+
+class FindingSortKeyTests(unittest.TestCase):
+    def test_severity_order_then_missing_then_id(self):
+        findings = [
+            ("F-009", None),
+            ("F-004", "Informational"),
+            ("F-002", "Low"),
+            ("F-007", "Critical"),
+            ("F-003", None),
+            ("F-005", "High"),
+            ("F-006", "Medium"),
+            ("F-001", "High"),
+        ]
+        ordered = sorted(findings, key=lambda f: compile.finding_sort_key(*f))
+        self.assertEqual(ordered, [
+            ("F-007", "Critical"),
+            ("F-001", "High"),
+            ("F-005", "High"),
+            ("F-006", "Medium"),
+            ("F-002", "Low"),
+            ("F-004", "Informational"),
+            ("F-003", None),
+            ("F-009", None),
+        ])
+
+    def test_missing_id_still_sorts(self):
+        self.assertEqual(compile.finding_sort_key(None, None), (5, ""))
+
+
+INDEX_HEADER = "finding_id,title,severity,cvss_score,owner,status,in_report\n"
+
+
+class LoadIndexIdsTests(unittest.TestCase):
+    def test_default_index_loads_an_f001_row(self):
+        root = support.make_worktree(self, {
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,Default password,High,9.8,alice,done,yes\n",
+        })
+        self.assertEqual(compile.load_index_ids(root, None, False), ({"F-001": 2}, []))
+
+    def test_explicit_in_root_index_wins(self):
+        root = support.make_worktree(self, {
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,x,,,,,\n",
+            "lead/index.csv": INDEX_HEADER + "F-002,y,,,,,\n",
+        })
+        self.assertEqual(compile.load_index_ids(root, "lead/index.csv", False), ({"F-002": 2}, []))
+        absolute = root.resolve() / "lead" / "index.csv"
+        self.assertEqual(compile.load_index_ids(root, absolute, True), ({"F-002": 2}, []))
+
+    def test_explicit_index_outside_root_is_refused(self):
+        root = support.make_worktree(self)
+        outside = support.make_worktree(self, {"index.csv": INDEX_HEADER + "F-001,x,,,,,\n"})
+        with self.assertRaises(compile.RootError):
+            compile.load_index_ids(root, outside / "index.csv", False)
+
+    def test_absent_index_warns_and_skips_comparison(self):
+        root = support.make_worktree(self)
+        for final in (False, True):
+            self.assertEqual(compile.load_index_ids(root, None, final), (None, [
+                ("warning", "tracker/findings-index.csv", 0,
+                 "findings index not found; ID comparison skipped"),
+            ]))
+
+    def test_header_only_index_warns_and_skips_comparison(self):
+        root = support.make_worktree(self, {"tracker/findings-index.csv": INDEX_HEADER + "\n"})
+        for final in (False, True):
+            self.assertEqual(compile.load_index_ids(root, None, final), (None, [
+                ("warning", "tracker/findings-index.csv", 1,
+                 "findings index has no rows; ID comparison skipped"),
+            ]))
+
+    def test_empty_file_warns_and_skips_comparison(self):
+        root = support.make_worktree(self, {"tracker/findings-index.csv": ""})
+        ids, diagnostics = compile.load_index_ids(root, None, True)
+        self.assertIsNone(ids)
+        self.assertEqual([d[0] for d in diagnostics], ["warning"])
+
+    def test_malformed_csv_is_warning_in_draft_and_error_in_final(self):
+        root = support.make_worktree(self, {
+            "tracker/findings-index.csv": INDEX_HEADER + '"F-001"x,y\n',
+        })
+        for final, level in ((False, "warning"), (True, "error")):
+            ids, diagnostics = compile.load_index_ids(root, None, final)
+            self.assertIsNone(ids)
+            self.assertEqual(len(diagnostics), 1)
+            self.assertEqual(diagnostics[0][:3], (level, "tracker/findings-index.csv", 0))
+            self.assertIn("not a readable CSV", diagnostics[0][3])
+
+    def test_missing_finding_id_column_is_warning_in_draft_and_error_in_final(self):
+        root = support.make_worktree(self, {
+            "tracker/findings-index.csv": "title,severity\nDefault password,High\n",
+        })
+        for final, level in ((False, "warning"), (True, "error")):
+            self.assertEqual(compile.load_index_ids(root, None, final), (None, [
+                (level, "tracker/findings-index.csv", 1,
+                 "findings index has no finding_id column; ID comparison skipped"),
+            ]))
+
+    def test_spreadsheet_bom_and_spaces_are_tolerated(self):
+        # Excel saves "UTF-8 CSV" with an invisible marker before the header.
+        root = support.make_worktree(self, {
+            "tracker/findings-index.csv": "﻿title, finding_id\nx, F-003 \ny,\n",
+        })
+        self.assertEqual(compile.load_index_ids(root, None, False), ({"F-003": 2}, []))
+
+
 if __name__ == "__main__":
     unittest.main()

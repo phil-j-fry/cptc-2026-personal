@@ -12,6 +12,7 @@ the findings index CSV) and writes its generated files under build/.
 """
 
 import argparse
+import csv
 import re
 from pathlib import Path
 
@@ -146,3 +147,283 @@ def resolve_in_root(root, path):
             "path is outside the root: " + str(path) + " -> " + str(resolved)
         )
     return resolved
+
+
+def finding_folders(root):
+    """Return the folders that hold findings, relative to root.
+
+    These are findings/ and incoming/<name>/findings/ for each teammate.
+    Every folder is checked with resolve_in_root() before anything inside it
+    is listed, so a symlink pointing outside the root raises RootError even
+    when the place it points to holds no findings.
+    """
+    folders = [Path("findings")]
+    incoming = resolve_in_root(root, "incoming")
+    if incoming.is_dir():
+        for owner in incoming.iterdir():
+            owner_folder = Path("incoming") / owner.name
+            # Check where the entry points before asking if it is a folder:
+            # is_dir() follows a symlink, so it would look outside first.
+            if resolve_in_root(root, owner_folder).is_dir():
+                folders.append(owner_folder / "findings")
+    for folder in folders:
+        resolve_in_root(root, folder)
+    return folders
+
+
+def discover_findings(root):
+    """Return every finding file to compile, sorted by path.
+
+    Looks in exactly two places: <root>/findings/F-*.md (your own findings)
+    and <root>/incoming/*/findings/F-*.md (each teammate's mirror). Raises
+    RootError if a folder or file there points outside the root.
+    """
+    root = Path(root).resolve()
+    findings = []
+    for folder in finding_folders(root):
+        for path in (root / folder).glob("F-*.md"):
+            # A single finding file can be a symlink too, so check it as well.
+            resolve_in_root(root, folder / path.name)
+            # Skip anything that isn't a plain file, e.g. a folder named F-x.md.
+            if path.is_file():
+                findings.append(path)
+    # glob() and iterdir() return names in whatever order the disk lists
+    # them. Sorting makes every run give the same order: findings/ sorts
+    # before incoming/. This only lists names; incoming/ is never opened for
+    # writing (R18).
+    return sorted(findings)
+
+
+# The finding's title line, e.g. `### F-001: Default admin password`. The ID
+# is F- plus three digits, or the unfilled `[[FINDING_ID]]` marker of an early
+# draft. Any number of `#` is accepted here so a wrong level can be reported
+# instead of the title going missing.
+HEADING_RE = re.compile(r"^(#+)[ \t]+(F-\d{3}|\[\[FINDING_ID\]\])[ \t]*:[ \t]*(.*)$")
+
+# The ID at the start of a finding's filename, e.g. F-001 in F-001-web01.md.
+# \b stops F-0012-x.md from reading as F-001.
+FILENAME_ID_RE = re.compile(r"^F-\d{3}\b")
+
+
+def find_title_heading(text):
+    """Return (line_number, match) for the first title heading, or None."""
+    # Split on "\n" only, so line numbers match grep -n (see above).
+    for line_number, line in enumerate(text.split("\n"), start=1):
+        # rstrip() also drops the "\r" a Windows line ending leaves behind.
+        match = HEADING_RE.match(line.rstrip())
+        if match:
+            return line_number, match
+    return None
+
+
+def parse_finding_heading(file_name, text):
+    """Return a finding's ID and title, read from its heading line.
+
+    The result is a dict:
+      id                the finding ID, or None if neither the heading nor
+                        the filename has one
+      title             the text after "ID:", as written, or None
+      line              the heading's line number (from 1), or None
+      heading_markers   leftover markers on the heading line, e.g. 1 for an
+                        unfilled [[FINDING_ID]]
+      diagnostics       (file_name, line_number, message) problems
+    Heading problems (ID mismatch, wrong heading level, no heading) are
+    reported only here, so no other check repeats them.
+    """
+    match = FILENAME_ID_RE.match(Path(file_name).name)
+    filename_id = match.group(0) if match else None
+    result = {"id": filename_id, "title": None, "line": None,
+              "heading_markers": 0, "diagnostics": []}
+    found = find_title_heading(text)
+    if found is None:
+        result["diagnostics"].append(
+            (file_name, 1, "no finding title heading like '### F-NNN: Title'"))
+        return result
+
+    line_number, heading = found
+    hashes, heading_id, title = heading.groups()
+    result["title"] = title
+    result["line"] = line_number
+    # group(0) is the whole heading line, since HEADING_RE runs from ^ to $.
+    result["heading_markers"] = len(LEFTOVER_RE.findall(heading.group(0)))
+    # Findings use ### for the title and #### for sections, so they nest
+    # under the report's "## 5. Detailed Findings" without changes.
+    if hashes != "###":
+        result["diagnostics"].append(
+            (file_name, line_number, "title is a " + hashes + " heading, not ###"))
+    if heading_id.startswith("F-"):
+        # The heading is what goes into the report, so its ID wins; a
+        # different filename ID is flagged so one of them gets fixed.
+        result["id"] = heading_id
+        if filename_id is not None and filename_id != heading_id:
+            result["diagnostics"].append(
+                (file_name, line_number,
+                 "heading ID " + heading_id + " does not match filename ID " + filename_id))
+    elif filename_id is None:
+        # An unfilled [[FINDING_ID]] uses the filename's ID (set above); if
+        # the filename has none either, report it.
+        result["diagnostics"].append(
+            (file_name, line_number, "no finding ID in the heading or the filename"))
+    return result
+
+
+# The labelled detail lines every finding must have, as in templates/finding.md.
+FIELD_LABELS = ["Severity", "CVSS 3.1", "Why this severity",
+                "Affected assets", "Status", "References"]
+
+# A labelled list line, e.g. `- **Severity:** High`. Spaces around the dash,
+# the label and the colon are allowed, so `-  ** Severity :**  High` still
+# counts. Group 1 is the label, group 2 the rest of the line.
+LABEL_LINE_RE = re.compile(r"^[ \t]*-[ \t]+\*\*[ \t]*([^*:]+?)[ \t]*:[ \t]*\*\*[ \t]*(.*?)[ \t]*$")
+
+# On the CVSS 3.1 line, the vector is between backticks and the score is in
+# parentheses: `CVSS:3.1/AV:N/...` (9.8).
+CVSS_VECTOR_RE = re.compile(r"`([^`]*)`")
+CVSS_SCORE_RE = re.compile(r"\(([^)]*)\)")
+
+
+def parse_labelled_fields(file_name, text):
+    """Return a finding's labelled details, read from its `- **Label:**` lines.
+
+    The result is a dict:
+      fields        label -> {"value": rest of the line as written, markers
+                    included, "line": line number from 1}, for each label
+                    in FIELD_LABELS that was found
+      cvss_vector   the text between backticks on the CVSS 3.1 line, or None
+      cvss_score    the text in parentheses on the CVSS 3.1 line, or None
+      diagnostics   (file_name, label, message) for each missing label
+    A missing label is reported, never raised, so one bad file can't stop
+    the whole compile.
+    """
+    fields = {}
+    # Split on "\n" only, so line numbers match grep -n (see above).
+    for line_number, line in enumerate(text.split("\n"), start=1):
+        # rstrip() also drops the "\r" a Windows line ending leaves behind,
+        # which would otherwise end up inside every value.
+        match = LABEL_LINE_RE.match(line.rstrip())
+        # The first line with a label wins; other labels (Likelihood,
+        # Immediate...) aren't needed by compile and are ignored.
+        if match and match.group(1) in FIELD_LABELS and match.group(1) not in fields:
+            fields[match.group(1)] = {"value": match.group(2), "line": line_number}
+
+    result = {"fields": fields, "cvss_vector": None, "cvss_score": None,
+              "diagnostics": []}
+    for label in FIELD_LABELS:
+        if label not in fields:
+            result["diagnostics"].append(
+                (file_name, label, "missing labelled line '- **" + label + ":**'"))
+
+    if "CVSS 3.1" in fields:
+        cvss = fields["CVSS 3.1"]["value"]
+        vector = CVSS_VECTOR_RE.search(cvss)
+        if vector:
+            result["cvss_vector"] = vector.group(1)
+            # Look for the score only outside the backticks, so brackets in
+            # a mistyped vector can't be read as the score.
+            cvss = cvss[:vector.start()] + cvss[vector.end():]
+        score = CVSS_SCORE_RE.search(cvss)
+        if score:
+            result["cvss_score"] = score.group(1)
+    return result
+
+
+# Severity levels from most to least severe. The position in this list is the
+# sort order; a finding with no severity sorts after all of them.
+SEVERITIES = ["Critical", "High", "Medium", "Low", "Informational"]
+
+# One level as a whole word. Case-sensitive on purpose: the template offers
+# these exact words, so "high" or "HIGH" means the line wasn't filled in
+# properly, and \b stops "Highest" from counting as High.
+SEVERITY_RE = re.compile(r"\b(Critical|High|Medium|Low|Informational)\b")
+
+
+def severity_value(file_name, fields):
+    """Return (severity, diagnostics) for one finding.
+
+    `fields` is the "fields" dict from parse_labelled_fields(). severity is
+    the first level word on the Severity line, or None.
+    """
+    if "Severity" not in fields:
+        # parse_labelled_fields() already reported the missing line, so
+        # don't report the same problem twice.
+        return None, []
+    field = fields["Severity"]
+    # Strip markers first: an unfilled [[CHOOSE: Critical / High / ...]]
+    # contains every level word, and must not read as Critical.
+    match = SEVERITY_RE.search(strip_markers(field["value"]))
+    if match:
+        return match.group(1), []
+    return None, [(file_name, field["line"],
+                   "no severity (Critical, High, Medium, Low or Informational); sorted last")]
+
+
+def finding_sort_key(finding_id, severity):
+    """Return the key that sorts findings Critical first, then by ID.
+
+    A finding with no severity (None) sorts after Informational.
+    """
+    if severity in SEVERITIES:
+        rank = SEVERITIES.index(severity)
+    else:
+        rank = len(SEVERITIES)
+    # IDs are F- plus three digits, so sorting them as text sorts them by
+    # number. A finding with no ID at all (None) uses "" so it still sorts.
+    return (rank, finding_id or "")
+
+
+# Where the findings index lives in the working copy when --index isn't given.
+DEFAULT_INDEX = Path("tracker") / "findings-index.csv"
+
+
+def load_index_ids(root, index, final):
+    """Return (ids, diagnostics) from the findings index CSV.
+
+    ids maps each finding_id to its line in the file, or is None when the
+    index can't be used, which turns off the missing/extra ID comparison.
+    Each diagnostic is (level, file, line, message), level "warning" or
+    "error". Line 0 means the problem is with the whole file, not one line.
+    Raises RootError if the index is outside the root.
+    """
+    if index is None:
+        index = DEFAULT_INDEX
+    # A relative --index is taken from the root, like every other path.
+    path = resolve_in_root(root, index)
+    shown = path.relative_to(Path(root).resolve()).as_posix()
+    if not path.exists():
+        return None, [("warning", shown, 0,
+                       "findings index not found; ID comparison skipped")]
+
+    # A broken index is a QA problem, not a crash, so the other outputs are
+    # still written: a warning while drafting, an error in --final.
+    problem_level = "error" if final else "warning"
+    try:
+        # utf-8-sig drops the invisible marker spreadsheet programs put at
+        # the start of a CSV, which would otherwise hide the finding_id name.
+        # newline="" is what the csv module needs to read quoted line breaks.
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            # strict=True makes a badly quoted line an error instead of a guess.
+            reader = csv.reader(handle, strict=True)
+            header = next(reader, None)
+            rows = [(reader.line_num, row) for row in reader]
+    except (csv.Error, UnicodeDecodeError) as error:
+        return None, [(problem_level, shown, 0,
+                       "findings index is not a readable CSV (" + str(error) + "); ID comparison skipped")]
+
+    if header is None:
+        return None, [("warning", shown, 1,
+                       "findings index is empty; ID comparison skipped")]
+    columns = [name.strip() for name in header]
+    if "finding_id" not in columns:
+        return None, [(problem_level, shown, 1,
+                       "findings index has no finding_id column; ID comparison skipped")]
+    column = columns.index("finding_id")
+    ids = {}
+    for line_number, row in rows:
+        if len(row) > column and row[column].strip():
+            ids.setdefault(row[column].strip(), line_number)
+    if not ids:
+        # An empty index would flag every finding as "extra", so treat a
+        # file with only the header row as absent.
+        return None, [("warning", shown, 1,
+                       "findings index has no rows; ID comparison skipped")]
+    return ids, []
