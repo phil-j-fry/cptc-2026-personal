@@ -59,3 +59,11 @@ __pycache__/
 !tools/tests/fixtures/**
 # Test scratch folder: never tracked
 tools/tests/.tmp/
+
+# Files waiting to move out of this public repo (to the team Drive or the team repo)
+_staging/
+
+# Personal agent and editor setup: kept local, not part of the public repo
+agents.md
+.maestri/
+.claude/settings.local.json

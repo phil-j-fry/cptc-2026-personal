@@ -1,4 +1,4 @@
-# CCSF CPTC Team Repo
+# CPTC Team Repo
 
 Pre-staged templates, checklists, and scripts for the Collegiate Penetration Testing Competition (CPTC12, Regionals).
 
@@ -20,12 +20,10 @@ Re-check the current rulebook (https://cp.tc/docs/cptc-rules.pdf) before the eve
 |---|---|
 | `CONVENTIONS.md` | **Team rules and naming conventions**, each linked to the document with the detail. Start here |
 | `OPEN-ITEMS.md` | Open questions, and every unconfirmed assumption with the question that blocks it |
-| `TODO.md` | Tasks: testing, facts to verify, build and handoff, meeting prep |
 | `WORKFLOWS.md` | Step-by-step walkthroughs (tentative) for everyone and for the report writer: what to do, in what order, with which file |
 | `templates/` | Report, finding, incident-report, status-update, inject-response, and presentation templates. **Start with `templates/README.md`**, which explains the `[[…]]` placeholder markers and which template to use when |
 | `findings-library/` | 22 pre-written findings, written during study. Copy one into `findings/` on the day |
 | `checklists/` | Printable run sheets: kickoff, AD, web, OT-safe, evidence, report QA, AI/LLM |
-| `notes/` | Study notes plus `technique-map.md` (what to study, by week, with sources). Anything useful becomes a checklist line before the freeze |
 | `scripts/` | Small helpers we can explain line by line |
 | `findings/` | One file per finding during the event (`F-001-short-name.md`). Used in the **working copy**, never committed (see below) |
 | `evidence/` | Screenshots and logs, named to match the finding ID. Same rule |
@@ -34,13 +32,12 @@ Re-check the current rulebook (https://cp.tc/docs/cptc-rules.pdf) before the eve
 
 ## What each file is for
 
-**Start with `CONVENTIONS.md`, then `WORKFLOWS.md`.** `CONVENTIONS.md` holds the team's rules (R1–R18), and the naming and format conventions. `OPEN-ITEMS.md` lists every open question and unconfirmed assumption, and `TODO.md` the tasks. `WORKFLOWS.md` says what everyone and the report writer do, step by step (tentative). This README is the map and the rulebook summary.
+**Start with `CONVENTIONS.md`, then `WORKFLOWS.md`.** `CONVENTIONS.md` holds the team's rules (R1–R18), and the naming and format conventions. `OPEN-ITEMS.md` lists every open question and unconfirmed assumption. `WORKFLOWS.md` says what everyone and the report writer do, step by step (tentative). This README is the map and the rulebook summary.
 
 | File | Use it for |
 |---|---|
 | `CONVENTIONS.md` | The rules and naming conventions |
 | `OPEN-ITEMS.md` | Open questions and unconfirmed items, with what each one blocks. Take this to the team meeting |
-| `TODO.md` | Tasks: testing before Oct 30, facts to verify, build and handoff, meeting prep |
 | `WORKFLOWS.md` | Step-by-step walkthroughs per role, naming the file or command for each step |
 | `templates/README.md` | The `[[…]]` marker key and which template to use when. Read before filling anything in |
 | `templates/finding.md` | One finding (copied once per finding) |
@@ -52,7 +49,6 @@ Re-check the current rulebook (https://cp.tc/docs/cptc-rules.pdf) before the eve
 | `findings-library/README.md` | Index of the 22 pre-written findings (L01–L22) and how to use them |
 | `checklists/00-kickoff.md` … `60-ai-llm.md` | Printable run sheets: kickoff, AD, web, OT-safe, evidence and logging, report QA, AI/LLM |
 | `scripts/logged-shell.sh` | Records each terminal session; `logged-shell.md` explains it line by line |
-| `notes/technique-map.md` | What to study and why, with sources from other teams' repos |
 | `tools/BUILD-SPEC.md` | The brief for building `compile.py` and `notebook.py` (planned) |
 | `.gitignore` | Keeps event files (findings, evidence, scan output, credentials) out of git if anyone commits by mistake |
 

@@ -1,12 +1,11 @@
 # Open Questions and Unconfirmed Items
 
-Everything we still need answered, in one list. Rules and conventions are in `CONVENTIONS.md`; tasks are in `TODO.md`. When a question is answered, move the answer into the right rule or convention, update every item in the table below that it was blocking, then delete the question.
+Everything we still need answered, in one list. Rules and conventions are in `CONVENTIONS.md`. When a question is answered, move the answer into the right rule or convention, update every item in the table below that it was blocking, then delete the question.
 
 ## Open questions
 
 Gathered from planning so far. One list: who answers each one gets worked out when the team meets. Move an item into `CONVENTIONS.md` once it's answered.
 
-- [ ] **How does this work fit with the existing CCSF repo?** What gets adopted, merged or dropped? (Everything here is a proposal until then.)
 - [ ] **Repo access:** has the access request gone in (it's due 14 days before the event)? Are all current members listed, and graduated members removed?
 - [ ] **Roles, and who owns which team jobs?** So far we assume only "everyone" and "the report writer" (`WORKFLOWS.md`). Jobs with no owner yet (each marked "owner TBD" where it appears): final severity calls (R8), checking reproduction steps before a finding goes in (R7), the chain finding (R9), the findings index (R17), incident reports (R10), talking to Operations and the client, status updates, injects, choosing the QA reader (R15), and what the team captain facilitates. (`README.md` → Roles is still blank.)
 - [ ] **Our in-character firm name and branding** (`[[FIRM_NAME]]`, cover page, logo).

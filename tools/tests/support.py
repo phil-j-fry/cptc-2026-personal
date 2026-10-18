@@ -16,8 +16,8 @@ TOOLS_DIR = Path(__file__).resolve().parent.parent
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-# Tests write only here (agents.md rule 2), never to /tmp or the OS temp
-# folder. .gitignore excludes it, so nothing a test leaves behind is committed.
+# Tests write only here, never to /tmp or the OS temp folder, so nothing
+# lands outside the repo. .gitignore excludes it, so nothing is committed.
 TMP_DIR = Path(__file__).resolve().parent / ".tmp"
 
 
