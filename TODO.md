@@ -1,0 +1,27 @@
+# TODO: apps and scripts
+
+The backlog for `compile.py`, `tools/notebook.py` and `scripts/`, and nothing else. An item moves to `dev-tasks` (through App Dev Manager or Task Planner) once it's scheduled.
+
+> Started Oct 19 at the repo split. "Old TODO" and "Drive TODO" mean the team's Drive to-do list (staged locally at `_staging/to-drive/TODO.md` until it's in Drive).
+
+1. Write `scripts/pull.sh`: one script that pulls everyone's findings, evidence, notes and tracker files, with names and IPs filled in at kickoff (old TODO L70).
+2. `compile.py`: build the attack path from each finding's "Attack chain" line. The tracker CSV's `choke_point` mark needs a home.
+3. Build and review `compile.py` and `tools/notebook.py` line by line (old TODO L8–9).
+4. Half-page card on how to run `compile.py` (old TODO L63).
+5. Check `compile.py`'s size against the spec's guideline (old TODO L64).
+6. Decide whether `tools/notebook.py` gets its Checklists screen, and whether it shows them as must-do steps or suggestions (old TODO L85). Together with old TODO L83 (playbooks vs. technique checklists), this decides where `checklists/10`–`60` live.
+7. Test both tools, including the notebook's security checks (old TODO L100).
+8. Run `scripts/logged-shell.sh` on Kali, including a remote session and an empty-Enter check (old TODO L97).
+9. Test the zsh auto-start block and the PowerShell transcript lines (old TODO L98).
+10. Have the test read the real `templates/tracker/findings-index.csv` header instead of hard-coding it (`test_compile.py:450`).
+11. When the organizer answers, update the build spec: what's on the competition boxes (Python 3?); how files move between boxes (decides the notebook's second export option); whether AI-assisted code is OK (rule R4).
+12. At the merge, add the app's test lines (`!tools/tests/fixtures/`, `!tools/tests/fixtures/**`, `tools/tests/.tmp/`) to the comp repo's `.gitignore`.
+13. Write `scripts/make-workcopy.sh <yourname>`: one command that replaces the hand-typed working-copy one-liner in the team `README.md` → Working copy (Phil, Oct 19; size decided at dev time). Before the Oct 30 freeze. It must also work from an existing clone, since GitHub access from the boxes is unconfirmed (Drive TODO L68 q1). It keeps the "refuses if `~/cptc-work` exists" guard, so the "never re-run the copy command" warning and the mid-event single-file `cp` stay as they are.
+    - **Small (~10 lines):** get the repo (clone, or use an existing clone), copy it to `~/cptc-work` without `.git`, create `field-notes/<name>/` and `incoming/`.
+    - **Medium (~25 lines, recommended Oct 19):** Small, plus copy `templates/tracker/` to `~/cptc-work/tracker/`, create an empty `~/cptc-work/ot-hosts.txt`, and save the name so `logged-shell.sh` and the zsh auto-start don't fall back to `kali`. Only file operations: no `sudo`, no judgment calls. `checklists/00` L9, L14, L15 then become one step.
+    - **Large (not recommended):** Medium, plus start `sshd`, change the `kali` password, the zsh auto-start block, the network check (Drive TODO L69) and a clock check. Against: needs `sudo` and kickoff decisions; a half-way failure lands in the first 30 minutes; the zsh block is untested (item 9); the network check waits on the organizer's answers; every line must be explainable (R4).
+    - Separate from `pull.sh` (item 1): that's the report writer collecting teammates' files all day; this runs once per person at kickoff.
+    - When it exists: the team README, `checklists/00` and WORKFLOWS step 1 say "run it"; its how-to goes in `tools/README.md`, including a list of every file and folder it creates (e.g. `~/cptc-work/`, `field-notes/<name>/`, `incoming/`, and for Medium `tracker/`, `ot-hosts.txt` and the saved name), so the team can check it and explain it (R4).
+14. Finish `tools/README.md` as each tool is built and reviewed (Oct 19: first version written at the split cleanup). Fill the three headed stubs under "Still to write (build workflow)", which `tools/BUILD-SPEC.md` (Deliverables) requires: how each tool works, section by section; a manual test checklist; "Questions Operations might ask". Also switch the `compile.py` section from "in progress" / "will" to what it actually does once it runs, and the `notebook.py` section once it's built.
+
+Not in this file: a worked attack-path example with fake data. That's a team task (Drive TODO), and it goes to the team repo once written.

@@ -3,7 +3,7 @@
 The report is only as good as the evidence. Novices: **this sheet is your main job, and it's worth real points.**
 
 ## Team screenshot standard (decide before the event)
-- Terminal theme: [[PREP_TERMINAL_THEME]], font size: [[PREP_TERMINAL_FONT_SIZE]]. Everyone uses the same settings, so screenshots in the report look consistent and stay legible. [[NOTE: These two markers are the team's to fill in before the Oct 30 lock, so the printed sheet has real values.]]
+- Terminal theme: [[PREP_TERMINAL_THEME]], font size: [[PREP_TERMINAL_FONT_SIZE]]. Everyone uses the same settings, so screenshots in the report look consistent and stay legible.
 
 ## Every session
 - [ ] Start `scripts/logged-shell.sh <yourname>`. Every command is captured with a timestamp in the prompt, and `*.cmds.log` gets one line per command (time, exit code, directory, command), which is the quick index for incident reports.
@@ -12,7 +12,7 @@ The report is only as good as the evidence. Novices: **this sheet is your main j
 - [ ] Web lane: keep everything going through Burp. For each finding, save the key request and response (right-click the item → "Copy to file" or "Save item") to `evidence/F-XXX-NN-request.txt` and note the time. Burp Community can't save a project, so whatever you don't save is gone when Burp closes.
 
 ## Every finding
-- [ ] Take an ID immediately (`F-001`, `F-002`…; how IDs are allocated is **TBD**, R6, blocked by the open question "Is shared storage or a shared document provided?" in `OPEN-ITEMS.md`) and announce it so it goes in `findings-index.csv`
+- [ ] Take an ID immediately (`F-001`, `F-002`…; how IDs are allocated is **TBD**, R6, blocked by the open question "Is shared storage or a shared document provided?") and announce it so it goes in `findings-index.csv`
 - [ ] Create `findings/F-XXX-short-name.md` from the matching `findings-library/` entry, or from `templates/finding.md` if there is none
 - [ ] Screenshot showing: **the command, the output, the target IP/hostname, and the clock** in one frame
 - [ ] Make it readable in the report: crop to what matters, use a large enough font that the text is legible at page width, and box or arrow the key line
@@ -29,4 +29,4 @@ The report is only as good as the evidence. Novices: **this sheet is your main j
 
 ## If something breaks
 - [ ] Stop. Note the time. Tell the team.
-- [ ] File `templates/incident-report.md` and notify Operations (owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md`; timing TBD, see the incident-report question)
+- [ ] File `templates/incident-report.md` and notify Operations (owner TBD; open question "Roles, and who owns which team jobs?"; timing TBD, open question "What do the rules require for incident reports, and how fast?")

@@ -3,7 +3,7 @@
 > Treat ride control as **safety-critical**. In real OT work, the deliverable is mostly **finding and reporting exposure**, not exploitation. Breaking a ride is the fastest way to lose points and to need an incident report.
 
 ## Before touching anything
-> **Unconfirmed:** the "no writes" limits on this sheet are our own safety policy, not a known rulebook rule. Blocked by the open question "What are the rules for OT / ride systems?" (`OPEN-ITEMS.md`).
+> **Unconfirmed:** the "no writes" limits on this sheet are our own safety policy, not a known rulebook rule. Blocked by the open question "What are the rules for OT / ride systems?"
 
 - [ ] Re-read the ROE for OT. Is active testing allowed at all? Which hosts?
 - [ ] Tell the team before any traffic to suspected OT ranges
@@ -46,7 +46,7 @@ Many controllers crash or misbehave when version detection or scripts hit their 
 | TCP 48898, UDP 48899 | Beckhoff ADS/AMS |
 | UDP 47808 | BACnet/IP |
 
-- **The port list is a safety net, not a guarantee.** Some devices fall over from plain host discovery. As soon as you identify an OT host, tell the team aloud, write it on the whiteboard, and add it to `~/cptc-work/ot-hosts.txt` (everyone appends it to their own copy; no tool shares the file. **TBD:** blocked by the open question "Is shared storage or a shared document provided?" in `OPEN-ITEMS.md`). Use `--excludefile ~/cptc-work/ot-hosts.txt` on all broad scans. From then on, touch it only with the low-rate checks above.
+- **The port list is a safety net, not a guarantee.** Some devices fall over from plain host discovery. As soon as you identify an OT host, tell the team aloud, write it on the whiteboard, and add it to `~/cptc-work/ot-hosts.txt` (everyone appends it to their own copy; no tool shares the file. **TBD:** blocked by the open question "Is shared storage or a shared document provided?"). Use `--excludefile ~/cptc-work/ot-hosts.txt` on all broad scans. From then on, touch it only with the low-rate checks above.
 - The list was built from Stanford's public CPTC scan harness (`blitzHarness/nmap/excluded_ports_services.txt`) plus other common ICS ports. Add anything the scope document names.
 
 ## Never (unless the ROE explicitly says otherwise, in writing)

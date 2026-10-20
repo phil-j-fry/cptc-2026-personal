@@ -4,11 +4,11 @@ This is a handoff brief for a Claude Code session (or a teammate) building two s
 
 ## Context you need first
 
-- **The repo is public** and is a CPTC (Collegiate Penetration Testing Competition) team repo. It holds templates, checklists and helper scripts used during a one-day pentest engagement. Read `README.md`, `templates/README.md` and `scripts/logged-shell.md` before starting.
+- **This is the app repo** (public): the tools, `scripts/`, and the templates and checklists they read, for a CPTC (Collegiate Penetration Testing Competition) team's one-day pentest engagement. Before the event it is copied into the team's competition repo (comp repo). Read `templates/README.md` and `scripts/logged-shell.md` before starting, and the comp repo's `README.md` for the game-day setup.
 - **Hard deadline:** the repo locks **Fri Oct 30, 2026 at 5:00 PM** (no commits during the week before the Nov 7 event). The tools must be finished, tested and reviewed by about **Oct 27**.
 - **The competition rulebook requires** that teams "may be asked to demonstrate or explain their pre-written scripts or code during the event." Every line must be explainable by a student. **Prefer simple, boring code over clever code.** Comment the *why*.
-- **Event environment (Unconfirmed; blocked by the open questions "What was on the competition boxes?" and "Network layout" in `OPEN-ITEMS.md`):** each tester has their own Kali Linux box (Python 3 is preinstalled; assume Python ≥ 3.9) and a Windows box, reached over RDP. **No internet access should be assumed.** Teammates' boxes may or may not reach each other.
-- **Working copy convention** (README → "Working copy and moving files on the day"): during the event everyone works in `~/cptc-work`, a plain copy of this repo with no `.git`. Files from teammates arrive in `~/cptc-work/incoming/<name>/`, a **read-only mirror** (rule R18): the tools never write there. The report is `~/cptc-work/report.md`, copied from `templates/report.md` at the midpoint. How finding IDs are allocated is TBD (rule R6: a shared doc, or per-person blocks); the tools must work either way.
+- **Event environment (Unconfirmed; blocked by the open questions "What was on the competition boxes?" and "Network layout"):** each tester has their own Kali Linux box (Python 3 is preinstalled; assume Python ≥ 3.9) and a Windows box, reached over RDP. **No internet access should be assumed.** Teammates' boxes may or may not reach each other.
+- **Working copy convention** (comp repo `README.md` → "Working copy and moving files on the day"): during the event everyone works in `~/cptc-work`, a plain copy of the comp repo with no `.git`. Files from teammates arrive in `~/cptc-work/incoming/<name>/`, a **read-only mirror** (rule R18): the tools never write there. The report is `~/cptc-work/report.md`, copied from `templates/report.md` at the midpoint. How finding IDs are allocated is TBD (rule R6: a shared doc, or per-person blocks); the tools must work either way.
 
 ## Constraints (apply to both tools)
 
@@ -121,7 +121,7 @@ This is a handoff brief for a Claude Code session (or a teammate) building two s
     - `IR-` and `F-` need an `NNN` the user types in: for `F-`, per the team's ID allocation (rule R6, TBD); for `IR-`, the tool suggests the highest existing IR number plus one (`001` if there is none), and the user can change it. Validate it against `^\d{3}$`. The other types have no number. The new file has `[[FINDING_ID]]` or `[[IR_ID]]` already filled with that ID, and `[[FINDING_TITLE]]` with the title. For a finding, the title field defaults to the chosen library entry's title; an edited title replaces only the text after `### [[FINDING_ID]]: ` in the entry's first heading, and gives the slug. Warn if a finding with that ID already exists in `findings/` or `incoming/`.
     - Otherwise the template is copied unchanged, markers included.
     - Refuse to overwrite an existing file; ask for a different title.
-    - Without the notebook, the same names can be made by hand; the convention is in `CONVENTIONS.md`.
+    - Without the notebook, the same names can be made by hand; the convention is in `templates/README.md` (File names).
 3. **Fill-in view (marker-driven fields):** clicking a file shows an input box for every `[[…]]` marker still in it, then the whole file in an editable textarea below. No field lists are written into the code: the template *is* the form, so a template change shows up in the form automatically.
     - **Scanning:** scan the text with one regex that also matches markers spanning several lines (some `[[NOTE: …]]` markers contain an example). Show them in the order they appear.
     - **What each marker becomes:**
@@ -150,12 +150,12 @@ This is a handoff brief for a Claude Code session (or a teammate) building two s
     - If time runs short, this feature is item 6 in the cut order (constraint 6): the terminal route in the checklist always works.
 5. **Export:**
     - (a) a zip named `cptc-export-<name>-<YYYYMMDDTHHMMSS>.zip`, saved to the root, laid out so unzipping it inside a teammate's `incoming/<name>/` gives exactly the mirror layout: `findings/`, `evidence/`, `field-notes/<name>/` and `tracker/` (the person's own tracker CSVs). Logs go in a `logs/` folder only if an "include logs" box is ticked (default off, they are large and may hold secrets). Every symlink is rejected from the zip. The tool never extracts a zip itself.
-    - (b) **last in the cut order (constraint 6). Unconfirmed whether it's needed:** a single combined Markdown file (all of that person's findings and notes) for pasting over RDP when no file transfer works. It is saved to the root as `cptc-combined-<name>-<timestamp>.md` (ignored by `.gitignore`): findings first, then `NOTE-`, `IR-`, `SU-` and `INJ-` files, each ordered by filename, each under a heading of its relative path, separated by `---`. Build everything else first; build this last if time allows. Whether it is truly needed depends on the open question in `OPEN-ITEMS.md` (how files move between boxes), which arrives after the build, so the code must work either way.
+    - (b) **last in the cut order (constraint 6). Unconfirmed whether it's needed:** a single combined Markdown file (all of that person's findings and notes) for pasting over RDP when no file transfer works. It is saved to the root as `cptc-combined-<name>-<timestamp>.md` (ignored by `.gitignore`): findings first, then `NOTE-`, `IR-`, `SU-` and `INJ-` files, each ordered by filename, each under a heading of its relative path, separated by `---`. Build everything else first; build this last if time allows. Whether it is truly needed depends on the open question "How may teammates move files…?" (how files move between boxes), which arrives after the build, so the code must work either way.
 6. **Compile** (item 7 in the cut order): a button that calls `compile.py`'s functions and shows the QA report.
 
 **Out of scope:** multi-user access, login/authentication, syncing between machines, rich-text editing, editing `report.md`, running tools or commands, anything network-facing beyond `127.0.0.1`.
 
-**Folder note:** use `field-notes/` for event notes. The repo's `notes/` folder is study notes and must not be mixed in.
+**Folder note:** use `field-notes/` for event notes.
 
 **Tests:** unit-test:
 - the marker scanner: each marker kind, a multi-line `[[NOTE]]`, a repeated name shown once, and bash `[[ -f x ]]` ignored
@@ -183,7 +183,7 @@ Manual test checklist in `tools/README.md`.
     - how it works, section by section
     - a manual test checklist
     - "Questions Operations might ask" with short answers
-- Update `README.md` (layout table) and `checklists/00-kickoff.md` / `50-report-qa.md` to point to the tools where relevant. Keep those edits minimal.
+- Update the comp repo's `README.md` (layout table) and `checklists/00-kickoff.md` (comp repo) / `50-report-qa.md` to point to the tools where relevant. Keep those edits minimal.
 - Approved edits outside `tools/`: the status-update `- **Time:**` line becomes `[[DATE]] [[TIME]]` and the inject-response `- **Sent:**` line becomes `[[DATE_SENT]] [[TIME_SENT]]`, so timeline times include a date; `.gitignore` gains `tools/tests/.tmp/`, and `cptc-combined-*.md` beside `cptc-export-*.zip`.
 
 ## Definition of done

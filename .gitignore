@@ -1,4 +1,4 @@
-# This repo is PUBLIC. Never commit anything from the engagement (README.md, CONVENTIONS.md R3).
+# This repo is PUBLIC. Never commit anything from the engagement.
 # Event work happens in ~/cptc-work, a copy with no .git. These entries are a second safety net
 # in case someone works inside the clone by mistake. Entries starting with / apply to the repo root only.
 

@@ -19,7 +19,7 @@ Rules:
 - **Options are separated with `/`, not `|`.** A `|` inside a Markdown table cell would split the column.
 - **One item's details are labelled list lines, not a table:** `- **Severity:** High`. Tables appear only in `report.md` and in what `compile.py` generates, because a `|` or a line break typed into a value breaks a table. Keep the leading `- `: without it, Markdown joins consecutive lines into one paragraph when rendered.
 - **The same name always means the same value.** `[[CLIENT_NAME]]` is the client's name everywhere it appears, so you can find-and-replace it in one go. If a template needs two different values of the same kind, give each its own name: `[[TIME_DETECTED]]`, `[[TIME_REPORTED]]`. A section that holds a variable number of items, such as reproduction steps, gets one marker for the whole section (`[[REPRODUCTION_STEPS]]`) rather than one per item. The one exception is the repeating rows and list items in `report.md` (one per finding, per roadmap action, per top risk). Those are patterns you copy once per item, so their markers repeat on purpose.
-- **One exception to the checklist rule below:** `checklists/40-evidence-and-logging.md` has a few `PREP_` markers for decisions the team fills in before the event (theme, font). They are meant to be found and filled by Oct 30.
+- **One exception to the checklist rule below:** `checklists/40-evidence-and-logging.md` has a few `PREP_` markers for decisions the team fills in before the event (theme, font).
 - **Checklists use a different style on purpose.** Command arguments in `checklists/` are written `<range>`, `<host>`, `$DC` and so on. Those get typed at the terminal and never reach the report, so they're not markers.
 - **A finished deliverable contains zero markers.** `checklists/50-report-qa.md` has the search command.
 
@@ -33,29 +33,39 @@ Use these names rather than inventing new ones for the same thing.
 | `[[FIRM_NAME]]`, `[[SENDER_NAME]]`, `[[TESTER]]` | Our in-character firm name and people. No school identifiers |
 | `[[FINDING_ID]]`, `[[FINDING_TITLE]]` | `F-001`, `F-002`, … (allocation TBD, R6) |
 | `[[IR_ID]]`, `[[REFERENCE]]` | `IR-001`, `IR-002`, … (`[[REFERENCE]]` is the IR or inject a `report.md` timeline row points to) |
-| `[[DATE]]`, `[[TIME]]`, and suffixed forms like `[[TIME_DETECTED]]` | `YYYY-MM-DD`, `HH:MM` (24-hour, local) |
+| `[[DATE]]`, `[[TIME]]`, and suffixed forms like `[[TIME_DETECTED]]` | `YYYY-MM-DD`, `HH:MM` (24-hour, local; the general convention is in `CONVENTIONS.md`, comp repo) |
 | `[[ENGAGEMENT_START]]`, `[[ENGAGEMENT_END]]`, `[[REPORT_DATE]]` | `YYYY-MM-DD` |
 | `[[HOST]]`, `[[HOST_IP]]`, `[[URL]]`, `[[ACCOUNT]]` | As observed |
 | `[[CVSS_VECTOR]]`, `[[CVSS_SCORE]]` | `CVSS:3.1/AV:N/AC:L/...` and `9.8` |
+
+### File names
+
+| File | Name |
+|---|---|
+| Finding | `findings/F-001-short-name.md` |
+| Incident report | `IR-001-short-name.md` |
+| Other event files (type prefix) | `NOTE-short-name.md`, `SU-short-name.md` (status update), `INJ-short-name.md` (inject response). The prefix says what the file is; it's never a `[[ ]]` tag, which QA would flag. `notebook.py` builds these names from a title and a type dropdown |
+| Evidence | `evidence/F-001-01.png`; Burp items `evidence/F-001-01-request.txt` (`checklists/40-evidence-and-logging.md`) |
+| Terminal logs | `~/cptc-logs/<name>_<UTC time>.log` and `.cmds.log` (`scripts/logged-shell.md`) |
 
 ## Which template, when
 
 | Template | Use it for | Who fills it | When |
 |---|---|---|---|
 | `finding.md` | One file per finding, copied to `findings/F-XXX-short-name.md` | The finder (R18) | The moment a finding is confirmed |
-| `severity-guide.md` | Reference, not a deliverable | Whoever makes severity calls (owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md`) | When assigning or reviewing severity |
+| `severity-guide.md` | Reference, not a deliverable | Whoever makes severity calls (owner TBD; open question "Roles, and who owns which team jobs?") | When assigning or reviewing severity |
 | `report.md` | The final report. Copied once to `~/cptc-work/report.md` (not into `findings/`) | The report writer | Copied at the midpoint, about 5pm; see `WORKFLOWS.md` |
-| `incident-report.md` | Anything we caused or might have caused | owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md` | Timing TBD (see the incident-report question) |
-| `status-update.md` | Scheduled or ad-hoc progress messages to the client | owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md` | Midpoint, and whenever a critical is found |
-| `inject-response.md` | A client request during the event | owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md` | Before the inject's due time |
+| `incident-report.md` | Anything we caused or might have caused | owner TBD; open question "Roles, and who owns which team jobs?" | Timing TBD (open question "What do the rules require for incident reports, and how fast?") |
+| `status-update.md` | Scheduled or ad-hoc progress messages to the client | owner TBD; open question "Roles, and who owns which team jobs?" | Midpoint, and whenever a critical is found |
+| `inject-response.md` | A client request during the event | owner TBD; open question "Roles, and who owns which team jobs?" | Before the inject's due time |
 | `presentation-outline.md` | Planning the debrief slides | Whole team | After the report is submitted |
-| `tracker/` | Hosts, credentials, created accounts and artifacts, attack path, and findings index (CSV) | Everyone (own rows); findings index owner TBD; see "Who owns which team jobs?" in `OPEN-ITEMS.md` | Copied to `~/cptc-work/tracker/` at kickoff. Sharing method TBD (blocked by the shared-storage question in `OPEN-ITEMS.md`); see `tracker/README.md` |
+| `tracker/` | Hosts, credentials, created accounts and artifacts, attack path, and findings index (CSV) | Everyone (own rows); findings index owner TBD; open question "Roles, and who owns which team jobs?" | Copied to `~/cptc-work/tracker/` at kickoff. Sharing method TBD (blocked by the open question "Is shared storage or a shared document provided?"); see `tracker/README.md` |
 
 ## The workflow from finding to report
 
-1. Confirm the finding and take an ID straight away (how IDs are allocated is **TBD**, R6; blocked by the open question "Is shared storage or a shared document provided?" in `OPEN-ITEMS.md`).
+1. Confirm the finding and take an ID straight away (how IDs are allocated is **TBD**, R6; blocked by the open question "Is shared storage or a shared document provided?").
 2. Copy `templates/finding.md` (or a matching `findings-library/` entry) to `findings/F-XXX-short-name.md`.
 3. Fill every `[[FIELD]]`, resolve every `[[CHOOSE]]`, and delete every `[[NOTE]]` as you go.
-4. Hand it to the report writer. You keep editing your own file until it's pasted into `report.md`; after that, changes are made in `report.md` (R18). A finding without complete reproduction steps is sent back (R7); who makes the final severity call is TBD (R8).
+4. Hand it to the report writer. You keep editing your own file until it's pasted into `report.md`; after that, changes are made in `report.md` (R18). A finding without complete reproduction steps is sent back (R7); who makes the final severity call is TBD (R8; open question "Roles, and who owns which team jobs?").
 5. At the midpoint the report writer copies `templates/report.md` to `~/cptc-work/report.md` and pastes the finished findings into it, ordered by severity (`WORKFLOWS.md`).
 6. Before every submission, run `checklists/50-report-qa.md`.
