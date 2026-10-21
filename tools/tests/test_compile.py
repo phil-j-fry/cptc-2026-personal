@@ -541,5 +541,235 @@ class LoadIndexIdsTests(unittest.TestCase):
         self.assertEqual(compile.load_index_ids(root, None, False), ({"F-003": 2}, []))
 
 
+class ScanOlderLeftoversTests(unittest.TestCase):
+    def scan(self, text):
+        return [hit[2] for hit in compile.scan_older_leftovers("f.md", text)]
+
+    def test_each_pattern_found_in_prose_with_line(self):
+        text = "a << b\nTODO fix\nsee F-XXX and IR-XXX\nport XX open\nYYYY at HH:MM\n"
+        self.assertEqual(compile.scan_older_leftovers("f.md", text), [
+            ("f.md", 1, "<<"), ("f.md", 2, "TODO"), ("f.md", 3, "F-XXX"),
+            ("f.md", 3, "IR-XXX"), ("f.md", 4, "XX"), ("f.md", 5, "YYYY"),
+            ("f.md", 5, "HH:MM"),
+        ])
+
+    def test_xxe_is_not_bare_xx(self):
+        self.assertEqual(self.scan("XXE injection in XXXL form"), [])
+
+    def test_fenced_and_inline_code_skipped(self):
+        text = "```\ncat << EOF\nTODO XX\n```\nrun `echo TODO F-XXX` here\nafter TODO\n"
+        self.assertEqual(compile.scan_older_leftovers("f.md", text), [("f.md", 6, "TODO")])
+
+    def test_tilde_fence_skipped_and_fence_kinds_not_mixed(self):
+        text = "~~~\nTODO\n```\nYYYY\n~~~\nafter TODO\n"
+        self.assertEqual(compile.scan_older_leftovers("f.md", text), [("f.md", 6, "TODO")])
+
+    def test_double_backtick_span_skipped(self):
+        self.assertEqual(self.scan("run ``TODO ` F-XXX`` then YYYY"), ["YYYY"])
+
+    def test_code_span_does_not_join_xs(self):
+        self.assertEqual(self.scan("X`code`X"), [])
+
+    def test_todo_inside_todo_marker_skipped(self):
+        self.assertEqual(self.scan("[[TODO: root cause]] and [[TODO: a\nTODO b]]"), [])
+
+    def test_other_patterns_inside_markers_still_reported(self):
+        self.assertEqual(self.scan("[[NOTE: use F-XXX\nthen YYYY]]"), ["F-XXX", "YYYY"])
+        self.assertEqual(self.scan("[[TODO: fill F-XXX]]"), ["F-XXX"])
+
+    def test_todo_inside_other_marker_still_reported(self):
+        self.assertEqual(self.scan("[[NOTE: TODO later]]"), ["TODO"])
+
+
+class CheckReproductionTests(unittest.TestCase):
+    def finding(self, steps):
+        return "### F-001: T\n\n#### Reproduction steps\n" + steps + "\n#### Evidence\nx\n"
+
+    def test_two_steps_two_indented_expected_pass(self):
+        text = self.finding("1. `cmd one`\n   Expected: a\n2. `cmd two`\n   Expected: b\n")
+        self.assertEqual(compile.check_reproduction("f.md", text), [])
+
+    def test_one_expected_fails_two_steps(self):
+        text = self.finding("1. `cmd one`\n   Expected: a\n2. `cmd two`\n")
+        self.assertEqual(compile.check_reproduction("f.md", text), [
+            ("f.md", 3, "reproduction steps: 2 numbered steps, 1 Expected: lines; "
+                        "need at least 1 step and an Expected: line for each"),
+        ])
+
+    def test_ip_first_output_lines_are_not_steps(self):
+        # Pasted output such as /etc/hosts starts lines with an IP address.
+        text = self.finding("1. `cat /etc/hosts`\n   Expected: the host list\n"
+                            "```\n10.0.0.5 dc01\n10.0.0.6 web01\n```\n")
+        self.assertEqual(compile.check_reproduction("f.md", text), [])
+
+    def test_no_steps_fails(self):
+        problems = compile.check_reproduction("f.md", self.finding("Expected: a\n"))
+        self.assertIn("0 numbered steps", problems[0][2])
+
+    def test_untouched_template_fails_despite_note_example(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        text = path.read_text(encoding="utf-8")
+        # The NOTE's example really is in the section, so this test means something.
+        self.assertIn("Expected:", compile.reproduction_section(text)[1])
+        problems = compile.check_reproduction("templates/finding.md", text)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("0 numbered steps, 0 Expected: lines", problems[0][2])
+
+    def test_complete_finding_passes(self):
+        text = support.make_complete_finding()
+        self.assertEqual(compile.check_reproduction("f.md", text), [])
+
+    def test_steps_after_next_heading_not_counted(self):
+        text = self.finding("1. `cmd`\n") + "   Expected: a\n"
+        self.assertEqual(len(compile.check_reproduction("f.md", text)), 1)
+
+    def test_deeper_heading_does_not_end_section(self):
+        text = self.finding("1. `cmd`\n##### detail\n   Expected: a\n")
+        self.assertEqual(compile.check_reproduction("f.md", text), [])
+
+    def test_windows_line_endings(self):
+        text = self.finding("1. `cmd`\n   Expected: a\n").replace("\n", "\r\n")
+        self.assertEqual(compile.check_reproduction("f.md", text), [])
+
+    def test_missing_section_reported(self):
+        self.assertEqual(compile.check_reproduction("f.md", "### F-001: T\n"), [
+            ("f.md", "Reproduction steps", "missing '#### Reproduction steps' section"),
+        ])
+
+
+class HasTextTests(unittest.TestCase):
+    def test_punctuation_only_remnants_are_missing(self):
+        # Untouched template values once their markers are stripped.
+        self.assertFalse(compile.has_text("[[HOST]] ([[HOST_IP]]), [[URL]], [[ACCOUNT]]"))
+        self.assertFalse(compile.has_text("() ,"))
+        self.assertFalse(compile.has_text("`[[CVSS_VECTOR]]` ([[CVSS_SCORE]])"))
+        self.assertFalse(compile.has_text("`` ()"))
+        self.assertFalse(compile.has_text("[[SEVERITY_RATIONALE]] [[NOTE: One line.]]"))
+        self.assertFalse(compile.has_text(""))
+
+    def test_filled_values_pass(self):
+        self.assertTrue(compile.has_text("web01 (10.0.0.1)"))
+        self.assertTrue(compile.has_text("`` (9)"))
+        self.assertTrue(compile.has_text("Café"))
+
+    def test_untouched_template_fields_missing(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        fields = compile.parse_labelled_fields("t.md", path.read_text(encoding="utf-8"))["fields"]
+        # References is not missing: see the next test (DECISIONS 2026-10-20 C-11).
+        self.assertEqual(compile.missing_required_fields(fields), [
+            "Severity", "CVSS 3.1", "Why this severity", "Affected assets", "Status"])
+
+    def test_untouched_references_remnant_counts_as_present(self):
+        # "CWE-, ATT&CK ," has letters, so it counts as text (user decision,
+        # option A). Its leftover markers still keep the finding from READY,
+        # and the reference check (C-12) still fails it for having no http link.
+        value = "CWE-[[CWE_ID]], ATT&CK [[ATTACK_TECHNIQUE_ID]], [[REFERENCE_URL]]"
+        self.assertTrue(compile.has_text(value))
+
+    def test_complete_finding_has_no_missing_fields(self):
+        fields = compile.parse_labelled_fields("f.md", support.make_complete_finding())["fields"]
+        self.assertEqual(compile.missing_required_fields(fields), [])
+
+    def test_absent_label_counts_as_missing(self):
+        text = support.make_complete_finding().replace("- **Status:**", "- **State:**")
+        fields = compile.parse_labelled_fields("f.md", text)["fields"]
+        self.assertEqual(compile.missing_required_fields(fields), ["Status"])
+
+    def test_one_blank_value_counted_once(self):
+        lines = []
+        for line in support.make_complete_finding().split("\n"):
+            if line.startswith("- **Why this severity:**"):
+                line = "- **Why this severity:** [[SEVERITY_RATIONALE]] ."
+            lines.append(line)
+        fields = compile.parse_labelled_fields("f.md", "\n".join(lines))["fields"]
+        self.assertEqual(compile.missing_required_fields(fields), ["Why this severity"])
+
+    def test_reproduction_does_not_affect_missing_fields(self):
+        text = support.make_complete_finding()
+        no_steps = text.split("#### Reproduction steps")[0]
+        self.assertNotEqual(compile.check_reproduction("f.md", no_steps), [])
+        fields = compile.parse_labelled_fields("f.md", no_steps)["fields"]
+        self.assertEqual(compile.missing_required_fields(fields), [])
+
+
+class CheckReferencesTests(unittest.TestCase):
+    def check(self, text):
+        fields = compile.parse_labelled_fields("f.md", text)["fields"]
+        return compile.check_references("f.md", fields)
+
+    def test_references_without_http_fails(self):
+        self.assertEqual(self.check("- **References:** CWE-798, ATT&CK T1078\n"),
+                         [("f.md", 1, "References line has no http link")])
+
+    def test_https_link_passes(self):
+        self.assertEqual(self.check("- **References:** CWE-798, https://example.invalid/advisory\n"), [])
+
+    def test_link_outside_the_labelled_line_does_not_count(self):
+        text = "- **References:** CWE-798\n\nSee https://example.invalid for more.\n"
+        self.assertEqual(self.check(text), [("f.md", 1, "References line has no http link")])
+
+    def test_link_inside_a_marker_does_not_count(self):
+        text = "- **References:** [[REFERENCE_URL]] [[NOTE: e.g. https://example.invalid]]\n"
+        self.assertEqual(len(self.check(text)), 1)
+
+    def test_untouched_template_fails(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        self.assertEqual(len(self.check(path.read_text(encoding="utf-8"))), 1)
+
+    def test_complete_finding_passes(self):
+        self.assertEqual(self.check(support.make_complete_finding()), [])
+
+    def test_missing_line_not_reported_twice(self):
+        self.assertEqual(self.check("- **Severity:** High\n"), [])
+
+
+class CheckCvssVersionTests(unittest.TestCase):
+    def check(self, cvss_line):
+        parsed = compile.parse_labelled_fields("f.md", "- **CVSS 3.1:** " + cvss_line + "\n")
+        return compile.check_cvss_version("f.md", parsed["fields"], parsed["cvss_vector"])
+
+    def test_cvss_31_vector_passes(self):
+        self.assertEqual(self.check("`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8)"), [])
+
+    def test_cvss_30_vector_fails_with_line(self):
+        self.assertEqual(self.check("`CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8)"), [
+            ("f.md", 1, "CVSS vector is not a full CVSS 3.1 vector: "
+                        "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"),
+        ])
+
+    def test_bare_score_fails(self):
+        self.assertEqual(self.check("9.8"),
+                         [("f.md", 1, "CVSS vector is not a full CVSS 3.1 vector: 9.8")])
+        self.assertEqual(len(self.check("`9.8`")), 1)
+
+    def test_missing_metric_fails(self):
+        self.assertEqual(len(self.check("`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H` (9.8)")), 1)
+
+    def test_reordered_metrics_fail(self):
+        self.assertEqual(len(self.check("`CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8)")), 1)
+
+    def test_extra_metric_fails(self):
+        self.assertEqual(len(self.check("`CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/E:P` (9.8)")), 1)
+
+    def test_unfilled_vector_marker_skipped(self):
+        self.assertEqual(self.check("`[[CVSS_VECTOR]]` ([[CVSS_SCORE]])"), [])
+        self.assertEqual(self.check("`[[CVSS_VECTOR` (9.8)"), [])
+
+    def test_other_marker_does_not_hide_wrong_version(self):
+        self.assertEqual(len(self.check("`CVSS:3.0/AV:N [[TODO: fix]]` (9.8)")), 1)
+
+    def test_empty_vector_fails(self):
+        self.assertEqual(self.check("`` (9.8)"),
+                         [("f.md", 1, "CVSS vector is not a full CVSS 3.1 vector: ")])
+        self.assertEqual(len(self.check("`` ()")), 1)
+
+    def test_complete_finding_passes(self):
+        parsed = compile.parse_labelled_fields("f.md", support.make_complete_finding())
+        self.assertEqual(compile.check_cvss_version("f.md", parsed["fields"], parsed["cvss_vector"]), [])
+
+    def test_missing_line_not_reported_twice(self):
+        self.assertEqual(compile.check_cvss_version("f.md", {}, None), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -442,3 +442,216 @@ def load_index_ids(root, index, final):
         return None, [("warning", shown, 1,
                        "findings index has no rows; ID comparison skipped")]
     return ids, []
+
+
+# Older-style placeholders from before the [[...]] markers, one regex each.
+# They can appear legitimately (e.g. "TODO" in quoted output), so they are
+# always warnings, even in --final.
+OLDER_LEFTOVER_PATTERNS = [
+    re.compile(r"<<"),
+    re.compile(r"TODO"),
+    re.compile(r"F-XXX"),
+    re.compile(r"IR-XXX"),
+    # \b on both sides: only a bare XX, not the XX in XXE or F-XXX.
+    re.compile(r"\bXX\b"),
+    re.compile(r"YYYY"),
+    re.compile(r"HH:MM"),
+]
+
+# An inline code span, e.g. `cat << EOF` or ``a ` inside``. Read it as: a run
+# of backticks (group 1), then as little text as possible, then the same run
+# again. Code is copied output, not prose, so it isn't checked.
+CODE_SPAN_RE = re.compile(r"(`+).*?\1")
+
+
+def hide_todo_marker_words(text):
+    """Return text with the word TODO blanked inside every [[TODO: ...]] marker."""
+    # The leftover-marker check already reports these markers, so their TODO
+    # isn't reported twice (OQ-02). Other words inside them still count.
+    for marker in MARKER_RE.findall(text):
+        if marker.startswith("[[TODO:"):
+            # Spaces, not "", so nothing else on the line moves or joins.
+            text = text.replace(marker, marker.replace("TODO", "    "))
+    return text
+
+
+def scan_older_leftovers(file_name, text):
+    """Return every older-style leftover as (file_name, line_number, matched_text).
+
+    Skips fenced code blocks and `code spans`. Inside markers, only the TODO
+    of a [[TODO: ...]] marker is skipped; e.g. F-XXX inside a NOTE still counts.
+    """
+    # Done on the whole text, so a marker spanning lines is handled. Only the
+    # letters TODO change, never line breaks, so line numbers stay the same.
+    text = hide_todo_marker_words(text)
+    hits = []
+    fence = None  # the ``` or ~~~ that opened the code block we are in
+    # Split on "\n" only, so line numbers match grep -n (see above).
+    for line_number, line in enumerate(text.split("\n"), start=1):
+        stripped = line.lstrip()
+        if fence is None and (stripped.startswith("```") or stripped.startswith("~~~")):
+            fence = stripped[:3]
+            continue
+        if fence is not None:
+            # Only the same kind of fence closes the block.
+            if stripped.startswith(fence):
+                fence = None
+            continue
+        # A space, not "", so X`code`X can't become a bare XX.
+        line = CODE_SPAN_RE.sub(" ", line)
+        for pattern in OLDER_LEFTOVER_PATTERNS:
+            for match in pattern.finditer(line):
+                hits.append((file_name, line_number, match.group(0)))
+    return hits
+
+
+# The heading that starts a finding's reproduction steps, as in the template.
+REPRODUCTION_HEADING_RE = re.compile(r"^####[ \t]+Reproduction steps[ \t]*$")
+
+# A ### or #### heading, which ends the reproduction section. ##### and
+# deeper don't match: after three or four #, a space or tab must follow.
+SECTION_END_RE = re.compile(r"^#{3,4}[ \t]")
+
+# A numbered step: optional indent, digits, a dot, then a space or tab, e.g.
+# "1. " or "  12.\t". The space after the dot matters: pasted output often
+# starts with an IP address (10.0.0.5 dc01), which must not count as a step.
+STEP_RE = re.compile(r"^[ \t]*\d+\.[ \t]")
+
+
+def reproduction_section(text):
+    """Return (heading_line_number, section_text), or None if there is no section.
+
+    The section is every line after `#### Reproduction steps` up to the next
+    ### or #### heading (or the end of the file).
+    """
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        # rstrip() also drops the "\r" a Windows line ending leaves behind.
+        if REPRODUCTION_HEADING_RE.match(line.rstrip()):
+            section = []
+            for section_line in lines[index + 1:]:
+                if SECTION_END_RE.match(section_line):
+                    break
+                section.append(section_line)
+            return index + 1, "\n".join(section)
+    return None
+
+
+def remove_note_markers(text):
+    """Return text with every complete [[NOTE: ...]] marker removed."""
+    for marker in MARKER_RE.findall(text):
+        if marker.startswith("[[NOTE:"):
+            text = text.replace(marker, "")
+    return text
+
+
+def check_reproduction(file_name, text):
+    """Return a list of reproduction-step problems; an empty list means it passes.
+
+    Passes when the section has at least one numbered step and at least as
+    many `Expected:` lines as steps. Each problem is (file_name, line_number,
+    message), or (file_name, "Reproduction steps", message) if the section is
+    missing, like a missing labelled line.
+    """
+    found = reproduction_section(text)
+    if found is None:
+        return [(file_name, "Reproduction steps",
+                 "missing '#### Reproduction steps' section")]
+    line_number, section = found
+    # The template's NOTE holds an example step and an Expected: line. Remove
+    # NOTEs first so an untouched template can't pass off that example.
+    section = remove_note_markers(section)
+    steps = 0
+    expected = 0
+    for line in section.split("\n"):
+        if STEP_RE.match(line):
+            steps += 1
+        # lstrip(): the template indents Expected: under its step.
+        if line.lstrip().startswith("Expected:"):
+            expected += 1
+    if steps >= 1 and expected >= steps:
+        return []
+    return [(file_name, line_number,
+             "reproduction steps: " + str(steps) + " numbered steps, "
+             + str(expected) + " Expected: lines; need at least 1 step and an Expected: line for each")]
+
+
+def has_text(value):
+    """Return True if value, with markers removed, has a letter or digit.
+
+    Punctuation left over from the template, like the "()" of an unfilled
+    `[[CVSS_VECTOR]]` ([[CVSS_SCORE]]), doesn't count as a value.
+    """
+    # isalnum() is True for any Unicode letter or digit, so a value written
+    # in another alphabet (e.g. an accented name) still counts.
+    for character in strip_markers(value):
+        if character.isalnum():
+            return True
+    return False
+
+
+def missing_required_fields(fields):
+    """Return the labels a finding needs for READY but has no value for.
+
+    `fields` is the "fields" dict from parse_labelled_fields(). The required
+    labels are FIELD_LABELS, the same six it reads (OQ-14). Reproduction
+    steps are not one of them; check_reproduction() checks those separately.
+    """
+    missing = []
+    for label in FIELD_LABELS:
+        if label not in fields or not has_text(fields[label]["value"]):
+            missing.append(label)
+    return missing
+
+
+def check_references(file_name, fields):
+    """Return a list of reference problems; an empty list means it passes.
+
+    Passes when the References line has "http" in it. Only that labelled line
+    is checked: a link elsewhere in the finding doesn't count. Each problem
+    is (file_name, line_number, message).
+    """
+    if "References" not in fields:
+        # parse_labelled_fields() already reported the missing line, so
+        # don't report the same problem twice.
+        return []
+    field = fields["References"]
+    # Strip markers first, so a link inside a NOTE's example isn't taken as
+    # a real reference.
+    if "http" in strip_markers(field["value"]):
+        return []
+    return [(file_name, field["line"], "References line has no http link")]
+
+
+# A full CVSS 3.1 base vector (OQ-09): all eight metrics in the standard
+# order, each with one of its allowed letters, and nothing extra. One shared
+# constant, so the notebook's CVSS_VECTOR warning can use the same rule (N4-03).
+FULL_CVSS31_VECTOR_RE = re.compile(
+    r"^CVSS:3\.1/AV:[NALP]/AC:[LH]/PR:[NHL]/UI:[NR]/S:[UC]/C:[NLH]/I:[NLH]/A:[NLH]$")
+
+
+def check_cvss_version(file_name, fields, cvss_vector):
+    """Return a list of CVSS-vector problems; an empty list means it passes.
+
+    `fields` and `cvss_vector` come from parse_labelled_fields(). The vector
+    must be a full CVSS 3.1 vector unless it is still the [[CVSS_VECTOR]]
+    placeholder. Each problem is (file_name, line_number, message).
+    """
+    if "CVSS 3.1" not in fields:
+        # parse_labelled_fields() already reported the missing line.
+        return []
+    field = fields["CVSS 3.1"]
+    vector = cvss_vector
+    if vector is None:
+        # No backticks on the line (e.g. just "9.8"): check the whole value,
+        # so a score typed in place of the vector is still reported.
+        vector = field["value"]
+    # Only an unfilled [[CVSS_VECTOR]] placeholder is skipped (closed or not):
+    # the leftover-marker check already reports it (OQ-05). Any other marker
+    # doesn't hide a bad vector, and an empty vector is reported too.
+    if "[[CVSS_VECTOR" in vector:
+        return []
+    if FULL_CVSS31_VECTOR_RE.match(vector):
+        return []
+    return [(file_name, field["line"],
+             "CVSS vector is not a full CVSS 3.1 vector: " + vector)]

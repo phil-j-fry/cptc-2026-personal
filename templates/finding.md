@@ -9,7 +9,7 @@
 - **Affected assets:** [[HOST]] ([[HOST_IP]]), [[URL]], [[ACCOUNT]]
 - **Discovered by / when:** [[TESTER]], [[DATE]] [[TIME]]
 - **Status:** [[CHOOSE: Confirmed / Exploited / Suspected]]
-- **References:** CWE-[[CWE_ID]], ATT&CK [[ATTACK_TECHNIQUE_ID]], [[REFERENCE_URL]] [[NOTE: At least one vendor or standards link. ATT&CK mitigation IDs (M10xx) are optional.]]
+- **References:** CWE-[[CWE_ID]], ATT&CK [[ATTACK_TECHNIQUE_ID]], [[REFERENCE_URL]] [[NOTE: At least one vendor or standards link, on this line. ATT&CK mitigation IDs (M10xx) are optional.]]
 
 #### Summary
 [[SUMMARY]]

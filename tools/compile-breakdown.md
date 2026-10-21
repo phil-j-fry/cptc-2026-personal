@@ -2,7 +2,7 @@
 
 Every block of `compile.py`, its test helpers, its tests, and the related edits outside `tools/`. The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code at the end of Chunk 2. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code at the end of Chunk 3. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 > **Status after Chunk 1:** these are building blocks only. `python3 tools/compile.py` doesn't do anything yet; the code that runs them on every finding arrives in task C-22. Don't demo it before M2. (Remove this note at M2.)
 
@@ -16,6 +16,7 @@ Line ranges match the code at the end of Chunk 2. The implementor updates this f
 | diagnostic | one problem found in a file, with the file name and the line (or field) it is on |
 | findings index | `tracker/findings-index.csv`: the team's master list of finding IDs, in its `finding_id` column |
 | incoming | `incoming/<name>/`: a teammate's files copied in; the tools only read it (rule R18) |
+| older-style leftover | a placeholder from before the `[[...]]` markers, like `TODO`, `XX` or `YYYY`; always a warning |
 
 ## 1. compile.py
 
@@ -149,6 +150,103 @@ Reads the `finding_id` column of the findings index, to compare later with the f
 **Why `utf-8-sig`:** spreadsheet programs save CSV with an invisible marker before the first column name. Without this, the column wouldn't be found.
 
 **Limit:** an index path that can't be opened at all (e.g. no permission, or it is a folder) isn't caught here; the error is passed on, and C-22 will turn it into a nonzero exit.
+
+### `OLDER_LEFTOVER_PATTERNS` + `CODE_SPAN_RE` - lines 447-464
+The seven older-style placeholders, one regex each, and the pattern for an inline code span.
+
+**If Operations asks:** "These are the placeholders people typed before we had `[[...]]` markers: `<<`, `TODO`, `F-XXX`, `IR-XXX`, a bare `XX`, `YYYY` and `HH:MM`. They can show up for real (a `TODO` in quoted output), so they are only ever warnings, even with `--final`."
+
+**Why `\bXX\b`:** only a bare `XX` counts, not the `XX` in `XXE` or `F-XXX`.
+
+**Why `(`+).*?\1`:** a code span opens and closes with the same number of backticks, so ``` ``a ` b`` ``` is one span even with a backtick inside.
+
+### `hide_todo_marker_words()` + `scan_older_leftovers()` - lines 467-505
+Lists every older-style placeholder with file and line, skipping fenced code blocks, code spans, and the `TODO` inside a `[[TODO: ...]]` marker.
+
+**If Operations asks:** "It's the second half of the QA checklist's search. It skips fenced code blocks and code spans, because commands and output aren't prose. It also skips the word TODO inside a `[[TODO: ...]]` placeholder, because the marker check already reports that one (OQ-02). Anything else inside a placeholder, like an `F-XXX` in a NOTE, is still reported."
+
+**Why blank TODO with spaces:** nothing else on the line moves, so `X` + `X` can't join into a new `XX`, and line numbers stay the same.
+
+**Why both fence kinds:** Markdown code blocks open with ```` ``` ```` or `~~~`. A block closes only on the same kind it opened with.
+
+**Limit:** hits on the same line are listed in pattern order (`<<` first, `HH:MM` last), not left to right. The line number is always right.
+
+**Limit:** a backtick with no closing partner can hide a little text after it from this check. Code spans spanning several lines aren't recognized.
+
+**Limit:** a code block that is never closed hides the rest of the file from this check. The leftover-marker check still sees those lines.
+
+**Limit:** only ```` ``` ```` / `~~~` fenced blocks and code spans are skipped. Code indented 4 spaces is checked like prose (Chunk 3 CR-1).
+
+### `REPRODUCTION_HEADING_RE` + `SECTION_END_RE` + `STEP_RE` + `reproduction_section()` + `remove_note_markers()` + `check_reproduction()` - lines 508-576
+Finds the `#### Reproduction steps` section and checks it has numbered steps, each with an `Expected:` line.
+
+**If Operations asks:** "A finding without reproduction steps gets sent back (R7). This reads the section up to the next `###` or `####` heading, removes NOTE placeholders, then counts numbered lines (`1. `, `2. `, ..., a space after the dot) and lines starting `Expected:`. It passes with at least one step and at least as many Expected lines as steps."
+
+**Why remove NOTEs first:** the template's own NOTE holds an example step and an `Expected:` line. Without this, an untouched template would pass.
+
+| Section contains | Result |
+|---|---|
+| 2 steps, 2 indented `Expected:` | pass |
+| 2 steps, 1 `Expected:` | problem: `2 numbered steps, 1 Expected: lines` |
+| only the template's NOTE example | problem: `0 numbered steps, 0 Expected: lines` |
+| no `#### Reproduction steps` heading | problem: missing section |
+
+**Why the missing-section problem is `(file, "Reproduction steps", message)`:** like a missing labelled line, it has no line to point at.
+
+**Limit:** a NOTE missing its closing `]]` isn't removed, so its example could count. The leftover-marker check reports that NOTE anyway.
+
+**Why a space after the dot (Chunk 3 CR-2):** pasted output often starts with an IP address (`10.0.0.5 dc01`). Without the space, each of those lines would count as a step, and a correct finding would fail.
+
+**Limit:** any line starting with digits, a dot and a space or tab counts as a step, including one inside a code block.
+
+### `has_text()` + `missing_required_fields()` - lines 579-604
+A value counts only if it still has a letter or digit once placeholders are removed. Lists which of the six required fields have no value.
+
+**If Operations asks:** "A finding is READY only when all six detail lines (Severity, CVSS 3.1, Why this severity, Affected assets, Status, References) have something in them (OQ-14). Leftover punctuation from the template, like the `()` around an unfilled score, doesn't count. Reproduction steps are checked separately."
+
+| Untouched template value | After removing placeholders | Counts as |
+|---|---|---|
+| `[[HOST]] ([[HOST_IP]]), [[URL]], [[ACCOUNT]]` | `(), ,` | missing |
+| `` `[[CVSS_VECTOR]]` ([[CVSS_SCORE]]) `` | ` `` () ` | missing |
+| `CWE-[[CWE_ID]], ATT&CK [[ATTACK_TECHNIQUE_ID]], [[REFERENCE_URL]]` | `CWE-, ATT&CK ,` | present |
+
+**Why References counts as present (user decision 2026-10-20, C-11):** `CWE` and `ATT&CK` are letters, and the plain rule has no special cases. An untouched References line still can't be READY, because its markers count as leftovers. Separately, `check_references()` fails it for having no `http` link.
+
+**Why `isalnum()`:** it accepts any Unicode letter or digit, so a value like `Café` counts.
+
+### `check_references()` - lines 607-623
+The References line must contain an `http` link.
+
+**If Operations asks:** "Every finding needs at least one vendor or standards link. We only look on the References line, so a link somewhere else in the finding doesn't count."
+
+**Why remove placeholders first:** a link that only appears inside a NOTE's example isn't a real reference.
+
+**Limit:** the match is case-sensitive, so `HTTP://` doesn't pass.
+
+**Limit:** the link must be on the `- **References:**` line itself. Links in a sub-list below it don't count, and an empty References line is then also a missing field. The template's NOTE says "on this line" (Chunk 3 CR-3).
+
+### `FULL_CVSS31_VECTOR_RE` + `check_cvss_version()` - lines 626-657
+The CVSS vector must be a full CVSS 3.1 vector: all eight metrics, in the standard order, nothing extra.
+
+**If Operations asks:** "Our report uses CVSS 3.1, so a vector from another version, one with a metric missing or out of order, or a score typed where the vector should be, is flagged with its file and line. An unfilled `[[CVSS_VECTOR]]` is left to the marker check, so it isn't reported twice (OQ-05)."
+
+**Why one shared constant (Chunk 3 CR-4):** it's the same rule as the notebook's CVSS_VECTOR format warning (OQ-09), so the notebook is to import it instead of keeping a copy (N4-03).
+
+| CVSS line | Result |
+|---|---|
+| `` `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8) `` | pass |
+| `` `CVSS:3.0/AV:N/...` (9.8) `` | problem |
+| `` `CVSS:3.1/.../I:H` `` (no `/A:`) | problem |
+| `` `CVSS:3.1/AC:L/AV:N/...` `` (reordered) | problem |
+| `` `CVSS:3.1/...A:H/E:P` `` (extra metric) | problem |
+| `9.8` (no backticks: the whole value is checked) | problem |
+| `` `[[CVSS_VECTOR]]` ([[CVSS_SCORE]]) `` | skipped |
+| `` `CVSS:3.0/AV:N [[TODO: fix]]` `` | problem: only the CVSS_VECTOR placeholder is skipped |
+| ` `` (9.8) ` or ` `` () ` | problem |
+
+**Why an empty vector gets two problems:** ` `` () ` is reported here and also as a missing CVSS 3.1 field. Both are true, and avoiding the overlap would need a special case.
+
+**Limit:** a valid vector written in another order (e.g. `AC` before `AV`) still fails, and blocks `--final`. The user accepted this (DECISIONS 2026-10-20 Chunk 3 CR-4).
 
 ## 2. Test helpers: tests/support.py
 
@@ -301,7 +399,60 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These cover every state the index file can be in, and check that a broken one only blocks the run in `--final`."
 
-#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 544-545
+#### `ScanOlderLeftoversTests` - lines 544-581
+- all seven patterns are found in prose, with file and line
+- `XXE` and `XXXL` aren't a bare `XX`
+- copies inside ```` ``` ```` or `~~~` code blocks and in code spans are skipped; a `~~~` block isn't closed by ```` ``` ````
+- a double-backtick span with a backtick inside is skipped; ``X`code`X`` doesn't become `XX`
+- `TODO` inside `[[TODO: ...]]` is skipped, even across lines
+- `F-XXX` inside a NOTE, `F-XXX` inside a TODO marker, and `TODO` inside a NOTE are still reported
+
+**If Operations asks:** "Each old-style placeholder is caught in normal text, and copies inside code or inside a TODO placeholder are ignored, exactly as the spec says."
+
+#### `CheckReproductionTests` - lines 584-637
+- 2 steps with 2 indented `Expected:` lines pass
+- 2 steps with 1 `Expected:` fail, with both counts and the heading's line
+- a step followed by a code block of IP-first lines (`10.0.0.5 dc01`) passes; the IP lines aren't steps
+- `Expected:` with no steps fails
+- the real `templates/finding.md` fails, though its NOTE has an example (the test first proves the example is in the section)
+- the complete sample finding passes
+- an `Expected:` under the next `####` heading doesn't count; a `#####` heading doesn't end the section
+- Windows `\r\n` line endings work
+- a missing section is reported
+
+**If Operations asks:** "These prove a finding needs a real Expected line for each step, and that the template's example can't pass for real steps."
+
+#### `HasTextTests` - lines 640-692
+- leftover punctuation like `() ,`, empty backticks and parentheses, and an unfilled rationale with a NOTE are missing
+- filled values pass, including `Café`
+- the untouched template gives exactly five missing fields; References counts as present (user decision)
+- the complete sample finding has none missing
+- a renamed label, or one punctuation-only value, is counted once
+- removing the reproduction section doesn't change the missing fields
+
+**If Operations asks:** "These prove that leftover template punctuation never passes as a filled-in value, and that the READY field count ignores reproduction steps."
+
+#### `CheckReferencesTests` - lines 695-723
+- a References line without `http` fails, at its line
+- `https://example.invalid` passes
+- a link elsewhere in the finding, or only inside a placeholder, doesn't count
+- the untouched template fails; the complete sample finding passes
+- a missing References line isn't reported twice
+
+**If Operations asks:** "These prove only a real link on the References line counts."
+
+#### `CheckCvssVersionTests` - lines 726-771
+- the full canonical `CVSS:3.1/...` vector passes
+- `CVSS:3.0/...` and a bare `9.8` (with or without backticks) fail, with the line
+- a missing `/A:` metric, reordered metrics, or an extra metric fail
+- an unfilled `[[CVSS_VECTOR]]`, closed or not, is skipped
+- another placeholder doesn't hide a wrong version
+- an empty vector fails, whether or not the score is filled
+- the complete sample finding passes; a missing CVSS line isn't reported twice
+
+**If Operations asks:** "These prove that only a full CVSS 3.1 vector passes, and that an unfilled vector is left to the marker check."
+
+#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 774-775
 Let one test file run on its own: `python3 tools/tests/test_compile.py`.
 
 **If Operations asks:** "So one test file can be run by itself. Normally we run them all with `python3 -m unittest discover tools/tests`."
@@ -318,12 +469,17 @@ The time lines now take a date plus a time (S-05, S-06, OQ-01), so the timeline 
 
 **If Operations asks:** "We added the date so our timeline can sort everything in order."
 
+### `templates/finding.md` line 12
+The References NOTE now says the link goes "on this line" (Chunk 3 CR-3), because `check_references()` only looks at that line. No other byte changed.
+
+**If Operations asks:** "The template now tells the writer where the link has to go, so a link in a sub-list below doesn't fail the check by surprise."
+
 ### `checklists/50-report-qa.md` line 8
 The manual marker grep uses the same regex as the tool, `\[\[[A-Z_]+` (CR-1).
 
 **If Operations asks:** "The checklist's search and the tool's search are the same, so they always agree on what counts as a leftover placeholder."
 
 ### `tools/BUILD-SPEC.md` Decisions log - lines 197-221
-Listed here because it isn't code, though it lives in `tools/`. A dated record of every design decision, matching `dev-tasks` (S-07).
+Listed here because it isn't code, though it lives in `tools/`. A dated record of the decisions resolved up to 2026-10-15 (S-07). Later decisions, including Chunk 3's departures from the spec (CR-2 step format, CR-4 full CVSS vector), are in the `dev-tasks` DECISIONS section, which wins where the two differ (agents.md rule 6).
 
-**If Operations asks:** "The spec ends with a dated list of our design decisions, so anyone can see why the code works the way it does."
+**If Operations asks:** "The spec ends with a dated list of our early design decisions. Later ones, like requiring the full CVSS 3.1 vector where the spec only checks the prefix, are in our task list's decisions section, which wins where the two differ."
