@@ -3,8 +3,15 @@
 import support  # puts tools/ on the import path, so it must come first
 import compile
 
+import ast
+import contextlib
+import importlib.util
+import io
+import os
 import re
+import shlex
 import unittest
+from unittest import mock
 
 
 class StripMarkersTests(unittest.TestCase):
@@ -1381,6 +1388,698 @@ class RenderCombinedFindingsTests(unittest.TestCase):
 
     def test_no_findings_gives_empty_text(self):
         self.assertEqual(compile.render_combined_findings([]), "")
+
+
+def whole_report(test, files, final):
+    """Return render_qa_report() for a list of (name, text) findings.
+
+    Each finding goes through compile.check_finding(), and the duplicate-ID
+    check runs across them. The fake findings have no index and no timeline
+    files, so those two checks are given as run with nothing found; their
+    own tests are below. report.md is checked in an empty fake root, so in
+    --final it is absent.
+    """
+    checks = no_problems()
+    findings = []
+    for name, text in files:
+        finding = compile.check_finding(name, text, final)
+        findings.append(finding)
+        for check_name, problems in finding["checks"].items():
+            checks[check_name] += problems
+    headings = [(finding["name"], finding["heading"]) for finding in findings]
+    duplicates = compile.check_duplicate_ids(compile.finding_id_locations(headings))
+    checks["duplicate finding IDs"] = compile.check_problems(
+        "duplicate finding IDs", duplicates, final)
+    readiness = [(finding["name"], finding["summary"]) for finding in findings]
+    report = compile.check_report(support.make_worktree(test), final)
+    return compile.render_qa_report(final, readiness, checks, report)
+
+
+def no_problems():
+    """Return a checks dict where every QA check ran and found nothing."""
+    return {name: [] for name in compile.QA_CHECKS}
+
+
+QA_GOLDEN = """\
+QA report (draft mode): problems are warnings
+
+Findings:
+  findings/F-001-x.md: READY
+
+Checks:
+PASS finding headings
+PASS labelled lines
+PASS severity
+PASS required fields
+PASS leftover markers
+PASS older-style leftovers
+PASS reproduction steps
+PASS references
+PASS CVSS version
+PASS duplicate finding IDs
+PASS findings index
+PASS summary table
+PASS interactions timeline
+"""
+
+
+class RenderQaReportTests(unittest.TestCase):
+    def setUp(self):
+        self.complete = support.make_complete_finding()
+        # Two leftover markers on line 7, a punctuation-only Status on line 9
+        # and an older-style TODO on line 19.
+        self.draft = support.make_complete_finding("F-002").replace(
+            "web01 (10.0.0.1), http", "[[HOST]] ([[HOST_IP]]), http").replace(
+            "- **Status:** Exploited", "- **Status:** ()").replace(
+            "unlimited attempts.", "unlimited attempts. TODO check lockout.")
+
+    def report(self, final):
+        """Render the report for the complete finding and the draft."""
+        return whole_report(self, [("findings/F-001-x.md", self.complete),
+                             ("findings/F-002-x.md", self.draft)], final)
+
+    def test_golden_complete_finding_passes_every_check(self):
+        self.assertEqual(whole_report(self, [("findings/F-001-x.md", self.complete)], False),
+                         QA_GOLDEN)
+
+    def test_final_header(self):
+        self.assertTrue(self.report(True).startswith(
+            "QA report (--final): any ERROR below fails the run\n"))
+
+    def test_same_marker_is_warning_in_draft_and_error_in_final(self):
+        self.assertIn("\n  WARNING: findings/F-002-x.md:7: leftover marker [[HOST\n",
+                      self.report(False))
+        self.assertIn("\n  ERROR: findings/F-002-x.md:7: leftover marker [[HOST\n",
+                      self.report(True))
+
+    def test_older_todo_is_warning_in_both_modes(self):
+        for final in (False, True):
+            with self.subTest(final=final):
+                self.assertIn("\nFAIL (0 errors, 1 warnings) older-style leftovers\n"
+                              "  WARNING: findings/F-002-x.md:19: older-style leftover TODO\n",
+                              self.report(final))
+
+    def test_empty_field_of_a_draft_is_an_error_in_final(self):
+        # The draft's "()" Status makes it DRAFT with 1 missing field; the
+        # matching problem is what fails --final (DECISIONS 2026-10-21 C-19 Q2).
+        self.assertIn("\nFAIL (1 errors, 0 warnings) required fields\n"
+                      "  ERROR: findings/F-002-x.md:9: Status has no value\n",
+                      self.report(True))
+
+    def test_readiness_lines(self):
+        text = self.report(False)
+        self.assertIn("\n  findings/F-001-x.md: READY\n", text)
+        self.assertIn("\n  findings/F-002-x.md: DRAFT: 2 unresolved markers, 1 missing fields\n",
+                      text)
+
+    def test_every_check_has_pass_or_fail(self):
+        lines = self.report(True).split("\n")
+        results = [line for line in lines if line.startswith(("PASS ", "FAIL "))]
+        self.assertEqual(len(results), len(compile.QA_CHECKS))
+        self.assertIn("FAIL (2 errors, 0 warnings) leftover markers", results)
+        self.assertIn("PASS labelled lines", results)
+
+    def test_no_findings(self):
+        text = compile.render_qa_report(False, [], no_problems(), None)
+        self.assertIn("\nFindings:\n  no finding files found\n", text)
+
+    def test_unknown_check_name_is_refused(self):
+        checks = no_problems()
+        checks["leftover marker"] = []
+        with self.assertRaisesRegex(ValueError, "unknown QA check: leftover marker"):
+            compile.render_qa_report(False, [], checks, None)
+
+    def test_missing_check_is_refused(self):
+        checks = no_problems()
+        del checks["references"]
+        with self.assertRaisesRegex(ValueError, "QA check not run: references"):
+            compile.render_qa_report(False, [], checks, None)
+
+    def test_qa_level(self):
+        self.assertEqual(compile.qa_level("leftover markers", False), "warning")
+        self.assertEqual(compile.qa_level("leftover markers", True), "error")
+        self.assertEqual(compile.qa_level("older-style leftovers", False), "warning")
+        self.assertEqual(compile.qa_level("older-style leftovers", True), "warning")
+        # Timeline problems are errors in --final like the others
+        # (DECISIONS 2026-10-21 C-19 Q1).
+        self.assertEqual(compile.qa_level("interactions timeline", True), "error")
+
+
+class CheckRequiredFieldsTests(unittest.TestCase):
+    def fields(self, text):
+        return compile.parse_labelled_fields("f.md", text)["fields"]
+
+    def test_complete_finding_passes(self):
+        self.assertEqual(
+            compile.check_required_fields("f.md", self.fields(support.make_complete_finding())), [])
+
+    def test_unfilled_rationale_fails_why_this_severity(self):
+        lines = support.make_complete_finding().split("\n")
+        self.assertTrue(lines[4].startswith("- **Why this severity:** We logged"))
+        lines[4] = "- **Why this severity:** [[SEVERITY_RATIONALE]]"
+        self.assertEqual(compile.check_required_fields("f.md", self.fields("\n".join(lines))),
+                         [("f.md", 5, "Why this severity has no value")])
+
+    def test_each_empty_field_at_its_line(self):
+        text = support.make_complete_finding().replace(
+            "- **Status:** Exploited", "- **Status:** -").replace(
+            "web01 (10.0.0.1), http://10.0.0.1/login, admin", "(), ,")
+        self.assertEqual(compile.check_required_fields("f.md", self.fields(text)), [
+            ("f.md", 7, "Affected assets has no value"),
+            ("f.md", 9, "Status has no value"),
+        ])
+
+    def test_missing_line_is_not_reported_twice(self):
+        text = support.make_complete_finding().replace("- **Status:** Exploited\n", "")
+        self.assertEqual(compile.check_required_fields("f.md", self.fields(text)), [])
+
+    def test_untouched_template_reports_its_five_empty_fields(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        fields = self.fields(path.read_text(encoding="utf-8"))
+        problems = compile.check_required_fields("f.md", fields)
+        self.assertEqual([message for file_name, line, message in problems], [
+            "Severity has no value", "CVSS 3.1 has no value", "Why this severity has no value",
+            "Affected assets has no value", "Status has no value"])
+
+
+class QaProblemShapeTests(unittest.TestCase):
+    """Every diagnostic shape prints as file:line, or as file when it has no line."""
+
+    def printed(self, check_name, diagnostics):
+        problems = compile.check_problems(check_name, diagnostics, True)
+        return [compile.problem_line(problem) for problem in problems]
+
+    def test_file_line_message(self):
+        text = support.make_complete_finding().replace("### F-001:", "### F-002:")
+        diagnostics = compile.parse_finding_heading("findings/F-001-x.md", text)["diagnostics"]
+        self.assertEqual(self.printed("finding headings", diagnostics), [
+            "ERROR: findings/F-001-x.md:1: heading ID F-002 does not match filename ID F-001"])
+
+    def test_missing_label_has_no_line(self):
+        text = support.make_complete_finding().replace("- **Status:** Exploited\n", "")
+        diagnostics = compile.parse_labelled_fields("findings/F-001-x.md", text)["diagnostics"]
+        self.assertEqual(self.printed("labelled lines", diagnostics), [
+            "ERROR: findings/F-001-x.md: missing labelled line '- **Status:**'"])
+
+    def test_missing_reproduction_section_has_no_line(self):
+        diagnostics = compile.check_reproduction("findings/F-001-x.md", "### F-001: x\n")
+        self.assertEqual(self.printed("reproduction steps", diagnostics), [
+            "ERROR: findings/F-001-x.md: missing '#### Reproduction steps' section"])
+
+    def test_missing_timeline_time_has_no_line(self):
+        diagnostics = compile.parse_timeline_entry(
+            "field-notes/alice/SU-x.md", "# Client Status Update\n")["diagnostics"]
+        self.assertEqual(self.printed("interactions timeline", diagnostics), [
+            "ERROR: field-notes/alice/SU-x.md: missing labelled line '- **Time:**'; sorted last"])
+
+    def test_leftover_hits(self):
+        hits = compile.scan_leftover_markers("findings/F-001-x.md", "a\n[[HOST]] b\n")
+        diagnostics = compile.hit_diagnostics(hits, "leftover marker")
+        self.assertEqual(self.printed("leftover markers", diagnostics), [
+            "ERROR: findings/F-001-x.md:2: leftover marker [[HOST"])
+
+    def test_index_loader_keeps_its_level_and_line_zero_has_no_line(self):
+        root = support.make_worktree(self, {"findings/README.md": "fake\n"})
+        problems = compile.load_index_ids(root, None, True)[1]
+        # An absent index stays a warning in --final (C-08).
+        self.assertEqual([compile.problem_line(problem) for problem in problems], [
+            "WARNING: tracker/findings-index.csv: findings index not found; ID comparison skipped"])
+        checks = no_problems()
+        checks["findings index"] = problems
+        text = compile.render_qa_report(True, [], checks, compile.check_report(root, True))
+        self.assertIn("\nFAIL (0 errors, 1 warnings) findings index\n", text)
+
+    def test_index_line_is_kept(self):
+        root = support.make_worktree(self, {"tracker/findings-index.csv": "title,severity\n"})
+        problems = compile.load_index_ids(root, None, True)[1]
+        self.assertEqual([compile.problem_line(problem) for problem in problems], [
+            "ERROR: tracker/findings-index.csv:1: findings index has no finding_id column; "
+            "ID comparison skipped"])
+
+
+class CheckReportTests(unittest.TestCase):
+    def render(self, final, report):
+        return compile.render_qa_report(final, [], no_problems(), report)
+
+    def test_report_only_marker_is_ignored_in_draft_and_blocks_final(self):
+        root = support.make_worktree(self, {"report.md": "# Report\n\nHost: [[HOST]]\n"})
+        self.assertIsNone(compile.check_report(root, False))
+        self.assertNotIn("report.md", self.render(False, None))
+
+        report = compile.check_report(root, True)
+        self.assertEqual(report["status"], "report.md checked: 1 problems")
+        self.assertEqual(report["checks"]["leftover markers"],
+                         [("error", "report.md", 3, "leftover marker [[HOST")])
+        self.assertTrue(self.render(True, report).endswith(
+            "\nreport.md:\n"
+            "report.md checked: 1 problems\n"
+            "FAIL (1 errors, 0 warnings) leftover markers\n"
+            "  ERROR: report.md:3: leftover marker [[HOST\n"
+            "PASS older-style leftovers\n"))
+
+    def test_draft_mode_never_opens_report(self):
+        root = support.make_worktree(self)
+        # Bytes that aren't UTF-8 make any read fail, so draft mode passing
+        # proves it never opened the file.
+        (root / "report.md").write_bytes(b"\xff [[HOST]]\n")
+        self.assertIsNone(compile.check_report(root, False))
+        with self.assertRaisesRegex(compile.InputError, "report.md is not UTF-8"):
+            compile.check_report(root, True)
+
+    def test_older_leftover_is_only_a_warning(self):
+        root = support.make_worktree(self, {"report.md": "# Report\nTODO add scope\n"})
+        report = compile.check_report(root, True)
+        self.assertEqual(report["status"], "report.md checked: 1 problems")
+        self.assertEqual(report["checks"]["older-style leftovers"],
+                         [("warning", "report.md", 2, "older-style leftover TODO")])
+        self.assertEqual(report["checks"]["leftover markers"], [])
+
+    def test_absent_report_is_the_loud_line_only(self):
+        root = support.make_worktree(self)
+        report = compile.check_report(root, True)
+        self.assertEqual(report, {"status": "report.md NOT FOUND: report not checked",
+                                  "checks": {}})
+        text = self.render(True, report)
+        self.assertTrue(text.endswith("\nreport.md:\nreport.md NOT FOUND: report not checked\n"))
+        # Absent alone adds no problem, so nothing fails the run.
+        self.assertNotIn("ERROR:", text)
+        self.assertNotIn("WARNING:", text)
+
+    def test_clean_report_passes_both_checks(self):
+        root = support.make_worktree(self, {"report.md": "# Report\n\nAll filled in.\n"})
+        report = compile.check_report(root, True)
+        self.assertTrue(self.render(True, report).endswith(
+            "\nreport.md:\n"
+            "report.md checked: 0 problems\n"
+            "PASS leftover markers\n"
+            "PASS older-style leftovers\n"))
+
+    def test_report_is_not_changed(self):
+        root = support.make_worktree(self, {"report.md": "# Report\r\n[[HOST]] TODO\r\n"})
+        before = (root / "report.md").read_bytes()
+        compile.check_report(root, True)
+        self.assertEqual((root / "report.md").read_bytes(), before)
+
+    def test_report_linked_outside_root_is_refused(self):
+        root = support.make_worktree(self)
+        outside = support.make_worktree(self, {"report.md": "# Elsewhere\n"})
+        (root / "report.md").symlink_to(outside / "report.md")
+        with self.assertRaisesRegex(compile.RootError, "report.md"):
+            compile.check_report(root, True)
+
+    def test_final_without_report_result_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "report.md"):
+            self.render(True, None)
+
+
+class WriteOutputsTests(unittest.TestCase):
+    DRAFT_NAME = "incoming/alice/findings/F-002-y.md"
+
+    def setUp(self):
+        # Two leftover markers on line 7 and an older-style TODO on line 19.
+        self.draft = support.make_complete_finding("F-002", "Weak service password").replace(
+            "web01 (10.0.0.1), http", "[[HOST]] ([[HOST_IP]]), http").replace(
+            "unlimited attempts.", "unlimited attempts. TODO check lockout.")
+        self.root = support.make_worktree(self, {
+            "findings/F-001-x.md": support.make_complete_finding(),
+            self.DRAFT_NAME: self.draft,
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,,,,,,\nF-002,,,,,,\n",
+            "field-notes/bob/SU-mid.md": "# Client Status Update\n\n- **Time:** 2026-11-07 10:00\n",
+            "report.md": "# Report\n\n[[EXEC_SUMMARY]]\n",
+        })
+
+    def run_outputs(self, final, index=None):
+        collected = compile.collect_qa(self.root, index, final)
+        return compile.write_outputs(self.root, collected, final), collected
+
+    def wrote_lines(self):
+        build = self.root.resolve() / "build"
+        return ["WROTE " + str(build / name) for name in compile.OUTPUT_FILES]
+
+    def test_draft_console_lines(self):
+        lines = self.run_outputs(False)[0]
+        self.assertEqual(lines, self.wrote_lines() + [
+            "WARNING: " + self.DRAFT_NAME + ":7: leftover marker [[HOST",
+            "WARNING: " + self.DRAFT_NAME + ":7: leftover marker [[HOST_IP",
+            "WARNING: " + self.DRAFT_NAME + ":19: older-style leftover TODO",
+            "QA: 2 findings; 1 READY; 1 DRAFT; 3 warnings; 0 errors",
+        ])
+
+    def test_final_console_lines(self):
+        lines = self.run_outputs(True)[0]
+        self.assertEqual(lines, self.wrote_lines() + [
+            "ERROR: " + self.DRAFT_NAME + ":7: leftover marker [[HOST",
+            "ERROR: " + self.DRAFT_NAME + ":7: leftover marker [[HOST_IP",
+            "WARNING: " + self.DRAFT_NAME + ":19: older-style leftover TODO",
+            "ERROR: report.md:3: leftover marker [[EXEC_SUMMARY",
+            "report.md checked: 1 problems",
+            "QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 3 errors",
+        ])
+
+    def test_final_absent_report_status_line(self):
+        (self.root / "report.md").unlink()
+        lines = self.run_outputs(True)[0]
+        self.assertEqual(lines[-2:], ["report.md NOT FOUND: report not checked",
+                                      "QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 2 errors"])
+
+    def test_four_files_hold_the_rendered_text(self):
+        lines, collected = self.run_outputs(False)
+        build = self.root / "build"
+        findings = collected["findings"]
+        self.assertEqual(sorted(path.name for path in build.iterdir()),
+                         sorted(compile.OUTPUT_FILES))
+        self.assertEqual((build / "findings-summary.md").read_text(encoding="utf-8"),
+                         compile.render_findings_summary([f["row"] for f in findings]))
+        self.assertEqual((build / "interactions-timeline.md").read_text(encoding="utf-8"),
+                         compile.render_timeline(collected["timeline"]))
+        self.assertIn("| 2026-11-07 10:00 | Status update | Client Status Update | SU-mid |",
+                      (build / "interactions-timeline.md").read_text(encoding="utf-8"))
+        self.assertEqual((build / "findings-combined.md").read_text(encoding="utf-8"),
+                         compile.render_combined_findings([f["combined"] for f in findings]))
+        qa = (build / "qa-report.txt").read_text(encoding="utf-8")
+        self.assertIn("\n  findings/F-001-x.md: READY\n"
+                      "  " + self.DRAFT_NAME + ": DRAFT: 2 unresolved markers, 0 missing fields\n",
+                      qa)
+
+    def test_stale_content_disappears(self):
+        build = self.root / "build"
+        build.mkdir()
+        for name in compile.OUTPUT_FILES:
+            (build / name).write_text("STALE " * 1000, encoding="utf-8")
+        self.run_outputs(False)
+        for name in compile.OUTPUT_FILES:
+            with self.subTest(file=name):
+                self.assertNotIn("STALE", (build / name).read_text(encoding="utf-8"))
+
+    def test_report_md_is_never_written(self):
+        before = (self.root / "report.md").read_bytes()
+        for final in (False, True):
+            with self.subTest(final=final):
+                lines = self.run_outputs(final)[0]
+                self.assertEqual((self.root / "report.md").read_bytes(), before)
+                self.assertFalse(any(line.startswith("WROTE") and line.endswith("report.md")
+                                     for line in lines))
+
+    def test_draft_has_no_report_status(self):
+        lines = self.run_outputs(False)[0]
+        self.assertFalse(any(line.startswith("report.md") for line in lines))
+
+    def test_incoming_is_not_changed(self):
+        path = self.root / self.DRAFT_NAME
+        before = path.read_bytes()
+        self.run_outputs(True)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(sorted(p.name for p in (self.root / "incoming").rglob("*")),
+                         ["F-002-y.md", "alice", "findings"])
+
+    def test_linked_build_folder_is_refused(self):
+        outside = support.make_worktree(self)
+        (self.root / "build").symlink_to(outside)
+        with self.assertRaisesRegex(compile.RootError, "build"):
+            self.run_outputs(False)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def stale_build(self):
+        """Fill the first three outputs with STALE; return every file's bytes."""
+        build = self.root / "build"
+        build.mkdir()
+        for name in compile.OUTPUT_FILES[:3]:
+            (build / name).write_text("STALE\n", encoding="utf-8")
+        return [(build / name).read_bytes() for name in compile.OUTPUT_FILES[:3]]
+
+    def assert_unchanged(self, stale, report):
+        """Assert the first three outputs and report.md kept their bytes."""
+        build = self.root / "build"
+        self.assertEqual([(build / name).read_bytes() for name in compile.OUTPUT_FILES[:3]],
+                         stale)
+        self.assertEqual((self.root / "report.md").read_bytes(), report)
+
+    def test_output_linked_to_report_is_refused_before_any_write(self):
+        report = (self.root / "report.md").read_bytes()
+        stale = self.stale_build()
+        (self.root / "build" / "qa-report.txt").symlink_to(self.root / "report.md")
+        with self.assertRaisesRegex(compile.RootError, "qa-report.txt"):
+            self.run_outputs(False)
+        self.assert_unchanged(stale, report)
+
+    def test_output_folder_is_refused_before_any_write(self):
+        report = (self.root / "report.md").read_bytes()
+        stale = self.stale_build()
+        (self.root / "build" / "qa-report.txt").mkdir()
+        with self.assertRaisesRegex(compile.RootError, "not a file.*qa-report.txt"):
+            self.run_outputs(False)
+        self.assert_unchanged(stale, report)
+
+    def test_output_hard_linked_to_report_is_refused_before_any_write(self):
+        report = (self.root / "report.md").read_bytes()
+        stale = self.stale_build()
+        os.link(self.root / "report.md", self.root / "build" / "qa-report.txt")
+        with self.assertRaisesRegex(compile.RootError, "hard link.*qa-report.txt"):
+            self.run_outputs(False)
+        self.assert_unchanged(stale, report)
+
+    def test_build_folder_linked_into_incoming_is_refused(self):
+        (self.root / "build").symlink_to(self.root / "incoming" / "alice")
+        with self.assertRaisesRegex(compile.RootError, "build"):
+            self.run_outputs(False)
+        self.assertEqual(sorted(p.name for p in (self.root / "incoming" / "alice").iterdir()),
+                         ["findings"])
+
+    def test_index_problems_name_the_same_file(self):
+        support.write_fake_file(self.root, "lead/index.csv", INDEX_HEADER + "F-001,,,,,,\n")
+        lines = self.run_outputs(False, index="lead/index.csv")[0]
+        self.assertIn("WARNING: " + self.DRAFT_NAME + ":1: F-002 is not in the findings index "
+                      "lead/index.csv", lines)
+
+    def test_timeline_and_pipe_problems_are_collected(self):
+        support.write_fake_file(self.root, "field-notes/bob/SU-mid.md",
+                                "# Client Status Update\n\n- **Time:** 10:00\n")
+        support.write_fake_file(self.root, "findings/F-003-z.md",
+                                support.make_complete_finding("F-003", "Login | portal"))
+        support.write_fake_file(self.root, "tracker/findings-index.csv",
+                                INDEX_HEADER + "F-001,,,,,,\nF-002,,,,,,\nF-003,,,,,,\n")
+        lines = self.run_outputs(True)[0]
+        self.assertIn("ERROR: findings/F-003-z.md:1: F-003: '|' in Title breaks the summary table",
+                      lines)
+        self.assertIn("ERROR: field-notes/bob/SU-mid.md:3: Time is not YYYY-MM-DD HH:MM: 10:00; "
+                      "sorted last", lines)
+
+    def test_windows_line_endings_reach_combined_unchanged(self):
+        windows = support.make_complete_finding().replace("\n", "\r\n")
+        (self.root / "findings" / "F-001-x.md").write_bytes(windows.encode("utf-8"))
+        self.run_outputs(False)
+        combined = (self.root / "build" / "findings-combined.md").read_bytes()
+        self.assertTrue(combined.startswith(windows.encode("utf-8")))
+
+    def test_finding_with_bom_is_ready_and_bom_is_dropped(self):
+        # Older Windows Notepad and PowerShell 5.1 save UTF-8 with a BOM.
+        text = support.make_complete_finding()
+        (self.root / "findings" / "F-001-x.md").write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+        lines, collected = self.run_outputs(True)
+        self.assertEqual(collected["findings"][0]["status"], "READY")
+        self.assertFalse([line for line in lines if "F-001-x.md" in line])
+        combined = (self.root / "build" / "findings-combined.md").read_bytes()
+        self.assertTrue(combined.startswith(text.encode("utf-8")))
+
+    def test_timeline_file_with_bom_keeps_its_summary(self):
+        (self.root / "field-notes" / "bob" / "SU-mid.md").write_bytes(
+            b"\xef\xbb\xbf# Client Status Update\n\n- **Time:** 2026-11-07 10:00\n")
+        self.run_outputs(False)
+        self.assertIn("| 2026-11-07 10:00 | Status update | Client Status Update | SU-mid |",
+                      (self.root / "build" / "interactions-timeline.md").read_text(encoding="utf-8"))
+
+    def test_empty_working_copy(self):
+        root = support.make_worktree(self)
+        collected = compile.collect_qa(root, None, False)
+        lines = compile.write_outputs(root, collected, False)
+        self.assertEqual(lines[4:], [
+            "WARNING: tracker/findings-index.csv: findings index not found; ID comparison skipped",
+            "QA: 0 findings; 0 READY; 0 DRAFT; 1 warnings; 0 errors",
+        ])
+
+
+class RunTests(unittest.TestCase):
+    def setUp(self):
+        # One leftover marker makes F-002 a draft; F-001 is complete.
+        self.draft = support.make_complete_finding("F-002", "Weak service password").replace(
+            "web01 (10.0.0.1), http", "[[HOST]] (10.0.0.1), http")
+        self.root = support.make_worktree(self, {
+            "findings/F-001-x.md": support.make_complete_finding(),
+            "findings/F-002-y.md": self.draft,
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,,,,,,\nF-002,,,,,,\n",
+        })
+
+    def run_quietly(self, root, index=None, final=False):
+        """Call compile.run() and return its result plus anything it printed."""
+        printed = io.StringIO()
+        # which() is patched to None so a pandoc installed on this machine
+        # doesn't add a hint line to every result.
+        with contextlib.redirect_stdout(printed), mock.patch("shutil.which", return_value=None):
+            result = compile.run(root, index, final)
+        return result, printed.getvalue()
+
+    def test_run_returns_data_and_prints_nothing(self):
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root)
+        self.assertEqual(printed, "")
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(qa_text, (self.root / "build" / "qa-report.txt").read_text(encoding="utf-8"))
+        self.assertEqual(lines[-1], "QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 0 errors")
+
+    def test_draft_marker_is_exit_0_and_final_is_exit_1(self):
+        self.assertEqual(self.run_quietly(self.root)[0][0], 0)
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root, final=True)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("ERROR: findings/F-002-y.md:7: leftover marker [[HOST", lines)
+
+    def test_final_with_only_warnings_is_exit_0(self):
+        support.write_fake_file(self.root, "findings/F-002-y.md", self.draft.replace(
+            "[[HOST]] (10.0.0.1)", "web01 (10.0.0.1) TODO"))
+        support.write_fake_file(self.root, "report.md", "# Report\n")
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root, final=True)
+        self.assertEqual(lines[-3:], [
+            "WARNING: findings/F-002-y.md:7: older-style leftover TODO",
+            "report.md checked: 0 problems",
+            "QA: 2 findings; 2 READY; 0 DRAFT; 1 warnings; 0 errors",
+        ])
+        self.assertEqual(exit_code, 0)
+
+    def test_final_absent_report_alone_is_exit_0(self):
+        (self.root / "findings" / "F-002-y.md").unlink()
+        support.write_fake_file(self.root, "tracker/findings-index.csv",
+                                INDEX_HEADER + "F-001,,,,,,\n")
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root, final=True)
+        self.assertEqual(lines[-2:], ["report.md NOT FOUND: report not checked",
+                                      "QA: 1 findings; 1 READY; 0 DRAFT; 0 warnings; 0 errors"])
+        self.assertEqual(exit_code, 0)
+
+    def test_report_marker_only_blocks_final(self):
+        support.write_fake_file(self.root, "findings/F-002-y.md", self.draft.replace(
+            "[[HOST]] (10.0.0.1)", "web01 (10.0.0.1)"))
+        support.write_fake_file(self.root, "report.md", "# Report\n[[EXEC_SUMMARY]]\n")
+        self.assertEqual(self.run_quietly(self.root)[0][0], 0)
+        self.assertEqual(self.run_quietly(self.root, final=True)[0][0], 1)
+
+    def test_git_root_is_exit_2_and_writes_nothing(self):
+        (self.root / ".git").mkdir()
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root)
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(qa_text, "")
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("compile failed: this looks like the git clone"))
+        self.assertFalse((self.root / "build").exists())
+
+    def test_missing_root_is_exit_2(self):
+        missing = self.root / "nope"
+        (exit_code, qa_text, lines), printed = self.run_quietly(missing)
+        self.assertEqual((exit_code, lines), (2, ["compile failed: root folder not found: "
+                                                  + str(missing.resolve())]))
+
+    def test_unreadable_finding_is_exit_2_naming_the_file(self):
+        (self.root / "findings" / "F-002-y.md").write_bytes(b"\xff### F-002: x\n")
+        (exit_code, qa_text, lines), printed = self.run_quietly(self.root)
+        self.assertEqual(exit_code, 2)
+        self.assertRegex(lines[0], r"^compile failed: .*F-002-y\.md is not UTF-8 text")
+
+    def test_index_outside_root_is_exit_2(self):
+        outside = support.make_worktree(self, {"index.csv": INDEX_HEADER})
+        (exit_code, qa_text, lines), printed = self.run_quietly(
+            self.root, index=outside / "index.csv")
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(lines[0].startswith("compile failed: path is outside the root"))
+
+    def test_index_name_matches_the_loader(self):
+        # C-14 carry-forward: membership problems name the file the loader
+        # names, here an explicit --index.
+        support.write_fake_file(self.root, "lead/index.csv", INDEX_HEADER + "F-001,,,,,,\nf-002,,,,,,\n")
+        lines = self.run_quietly(self.root, index="lead/index.csv")[0][2]
+        # Exact text: f-002 matches nothing, so it is both missing and extra.
+        self.assertIn("WARNING: findings/F-002-y.md:1: F-002 is not in the findings index "
+                      "lead/index.csv", lines)
+        self.assertIn("WARNING: lead/index.csv:3: f-002 is in the findings index but no "
+                      "finding file has it", lines)
+
+    def test_pandoc_present_adds_one_hint_last(self):
+        with mock.patch("shutil.which", return_value="/usr/bin/pandoc") as which:
+            exit_code, qa_text, lines = compile.run(self.root, None, False)
+        which.assert_called_once_with("pandoc")
+        root = self.root.resolve()
+        self.assertEqual([line for line in lines if line.startswith("HINT:")], [lines[-1]])
+        self.assertEqual(lines[-1], "HINT: to convert the report, run: pandoc "
+                         + shlex.quote(str(root / "report.md")) + " -o "
+                         + shlex.quote(str(root / "build" / "report.docx"))
+                         + " (or end it in report.pdf; PDF also needs a LaTeX engine)")
+
+    def test_pandoc_hint_quotes_a_path_with_spaces(self):
+        root = support.make_worktree(self) / "my work"
+        root.mkdir()
+        with mock.patch("shutil.which", return_value="/usr/bin/pandoc"):
+            hint = compile.pandoc_hint(root)
+        self.assertIn("pandoc '" + str(root.resolve()) + "/report.md' -o '", hint)
+
+    def test_pandoc_absent_adds_no_hint(self):
+        lines = self.run_quietly(self.root)[0][2]
+        self.assertFalse(any(line.startswith("HINT:") for line in lines))
+
+
+class MainTests(unittest.TestCase):
+    def test_main_prints_the_lines_and_returns_the_exit_code(self):
+        root = support.make_worktree(self, {
+            "findings/F-001-x.md": support.make_complete_finding().replace(
+                "- **Status:** Exploited", "- **Status:** [[CHOOSE: Open / Exploited]]"),
+        })
+        for final, expected in ((False, 0), (True, 1)):
+            with self.subTest(final=final):
+                argv = ["--root", str(root)] + (["--final"] if final else [])
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed), \
+                        mock.patch("shutil.which", return_value=None):
+                    exit_code = compile.main(argv)
+                    lines = compile.run(root, None, final)[2]
+                self.assertEqual(exit_code, expected)
+                self.assertEqual(printed.getvalue(), "\n".join(lines) + "\n")
+
+    def test_help_exits_0(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                compile.main(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+
+class ModuleSafetyTests(unittest.TestCase):
+    PATH = support.TOOLS_DIR / "compile.py"
+
+    def test_import_is_silent(self):
+        # Load a fresh copy under another name, so the tests' own compile
+        # module is untouched; importing it must print nothing.
+        spec = importlib.util.spec_from_file_location("compile_import_check", str(self.PATH))
+        module = importlib.util.module_from_spec(spec)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+            spec.loader.exec_module(module)
+        self.assertEqual(printed.getvalue(), "")
+
+    def test_only_safe_modules_are_imported(self):
+        tree = ast.parse(self.PATH.read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module)
+        # No subprocess or os (os.system, os.popen): the tool runs no commands.
+        self.assertEqual(imported, {"argparse", "csv", "re", "shlex", "shutil", "sys", "pathlib"})
+
+    def test_no_command_running_call_appears(self):
+        tree = ast.parse(self.PATH.read_text(encoding="utf-8"))
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+        for name in ("subprocess", "system", "popen", "Popen", "exec", "eval"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, names)
 
 
 if __name__ == "__main__":

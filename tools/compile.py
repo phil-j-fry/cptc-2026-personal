@@ -14,6 +14,9 @@ the findings index CSV) and writes its generated files under build/.
 import argparse
 import csv
 import re
+import shlex
+import shutil
+import sys
 from pathlib import Path
 
 # One template marker, complete from `[[` to `]]`. Read it aloud as:
@@ -95,7 +98,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--final",
         action="store_true",
-        help="pre-submission check: every QA problem is an error and the exit code is 1 if any check fails",
+        help="pre-submission check: QA problems become errors (a few, like older-style "
+             "leftovers, stay warnings) and the exit code is 1 if there is any error",
     )
     return parser.parse_args(argv)
 
@@ -385,6 +389,20 @@ def finding_sort_key(finding_id, severity):
 DEFAULT_INDEX = Path("tracker") / "findings-index.csv"
 
 
+def index_location(root, index):
+    """Return (path, shown) for the findings index.
+
+    path is the full resolved path; shown is its name relative to the root,
+    as every index problem names it. index None means DEFAULT_INDEX.
+    Raises RootError if the index is outside the root.
+    """
+    if index is None:
+        index = DEFAULT_INDEX
+    # A relative --index is taken from the root, like every other path.
+    path = resolve_in_root(root, index)
+    return path, path.relative_to(Path(root).resolve()).as_posix()
+
+
 def load_index_ids(root, index, final):
     """Return (ids, diagnostics) from the findings index CSV.
 
@@ -394,11 +412,7 @@ def load_index_ids(root, index, final):
     "error". Line 0 means the problem is with the whole file, not one line.
     Raises RootError if the index is outside the root.
     """
-    if index is None:
-        index = DEFAULT_INDEX
-    # A relative --index is taken from the root, like every other path.
-    path = resolve_in_root(root, index)
-    shown = path.relative_to(Path(root).resolve()).as_posix()
+    path, shown = index_location(root, index)
     if not path.exists():
         return None, [("warning", shown, 0,
                        "findings index not found; ID comparison skipped")]
@@ -1038,3 +1052,487 @@ def render_combined_findings(findings):
         parts.append(text)
     # A blank line between findings keeps each one a separate block.
     return "\n".join(parts)
+
+
+# The QA checks, in the order qa-report.txt lists them. Each one shows PASS
+# when it found no problems, otherwise FAIL.
+QA_CHECKS = [
+    "finding headings",
+    "labelled lines",
+    "severity",
+    "required fields",
+    "leftover markers",
+    "older-style leftovers",
+    "reproduction steps",
+    "references",
+    "CVSS version",
+    "duplicate finding IDs",
+    "findings index",
+    "summary table",
+    "interactions timeline",
+]
+
+# Older-style leftovers can appear legitimately (e.g. "TODO" in quoted
+# output), so their problems stay warnings even in --final.
+ALWAYS_WARNING_CHECKS = ["older-style leftovers"]
+
+
+def check_required_fields(file_name, fields):
+    """Return a problem for each required field whose line has no value.
+
+    `fields` is the "fields" dict from parse_labelled_fields(). Uses the same
+    rule as READY (missing_required_fields()), so every finding that is DRAFT
+    for an empty field also has a QA problem, and --final can't pass it
+    (DECISIONS 2026-10-21 C-19 Q2). Each problem is (file_name,
+    line_number, message).
+    """
+    problems = []
+    for label in missing_required_fields(fields):
+        # A missing line has no value either, but parse_labelled_fields()
+        # already reports it, so it isn't reported twice.
+        if label in fields:
+            problems.append((file_name, fields[label]["line"], label + " has no value"))
+    return problems
+
+
+def qa_level(check_name, final):
+    """Return "warning" or "error" for a problem found by one check.
+
+    Drafts are normal during the event, so in draft mode every problem is a
+    warning. In --final every problem is an error, except for the checks in
+    ALWAYS_WARNING_CHECKS.
+    """
+    if final and check_name not in ALWAYS_WARNING_CHECKS:
+        return "error"
+    return "warning"
+
+
+def hit_diagnostics(hits, what):
+    """Turn scanner hits into (file_name, line_number, message) diagnostics.
+
+    `hits` come from scan_leftover_markers() or scan_older_leftovers(), as
+    (file_name, line_number, matched_text). `what` names the kind of hit,
+    e.g. "leftover marker", so the message reads "leftover marker [[HOST".
+    """
+    diagnostics = []
+    for file_name, line_number, matched_text in hits:
+        diagnostics.append((file_name, line_number, what + " " + matched_text))
+    return diagnostics
+
+
+def check_problems(check_name, diagnostics, final):
+    """Return one check's diagnostics as (level, file_name, line_number, message).
+
+    Each diagnostic is (file_name, line_number, message), or (file_name,
+    label, message) when there is no line to point at (a missing labelled
+    line or section); those get line_number None. The level comes from
+    qa_level(). The findings index loader already gives its own levels, so
+    its problems are added as they are, without this function.
+    """
+    level = qa_level(check_name, final)
+    problems = []
+    for file_name, place, message in diagnostics:
+        # A label (text) isn't a line number, so that problem has no line.
+        line_number = place if isinstance(place, int) else None
+        problems.append((level, file_name, line_number, message))
+    return problems
+
+
+def problem_location(file_name, line_number):
+    """Return "file:line", or just "file" for a problem with no line."""
+    # None means there is no line to point at; the findings index loader
+    # uses line 0 for a problem with the whole file.
+    if line_number:
+        return file_name + ":" + str(line_number)
+    return file_name
+
+
+def problem_line(problem):
+    """Return one problem as "WARNING: file:line: message" (or "ERROR: ...")."""
+    level, file_name, line_number, message = problem
+    return level.upper() + ": " + problem_location(file_name, line_number) + ": " + message
+
+
+def count_levels(problems):
+    """Return (warnings, errors): how many problems have each level."""
+    warnings = 0
+    errors = 0
+    for problem in problems:
+        if problem[0] == "error":
+            errors += 1
+        else:
+            warnings += 1
+    return warnings, errors
+
+
+def check_status(problems):
+    """Return a check's result: "PASS", or "FAIL" with its problem counts."""
+    if not problems:
+        return "PASS"
+    warnings, errors = count_levels(problems)
+    return "FAIL (" + str(errors) + " errors, " + str(warnings) + " warnings)"
+
+
+class InputError(Exception):
+    """An input file can't be read as text. The message names the file."""
+
+
+def read_markdown(path):
+    """Return a Markdown file's text as it is on disk, minus a leading BOM.
+
+    Raises InputError if the file isn't UTF-8 text.
+    """
+    try:
+        # utf-8-sig drops the invisible BOM some Windows editors put first,
+        # which would hide a "# " heading on line 1. newline="" keeps "\r\n"
+        # line endings, so findings-combined.md copies the text unchanged.
+        with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+            return handle.read()
+    except UnicodeDecodeError as error:
+        # Python's own message doesn't say which file, so add it.
+        raise InputError(str(path) + " is not UTF-8 text (" + str(error) + ")")
+
+
+# The hand-assembled report in the root. --final checks it; nothing ever
+# writes it.
+REPORT_FILE = "report.md"
+
+
+def check_report(root, final):
+    """Return the report.md result for the QA report, or None in draft mode.
+
+    In --final the result is a dict:
+      status    "report.md NOT FOUND: report not checked", or
+                "report.md checked: N problems"
+      checks    "leftover markers" and "older-style leftovers" mapped to
+                their problems in report.md, as (level, file_name,
+                line_number, message); empty when report.md is absent
+    report.md is only read, for these two checks; it is never parsed or
+    changed. Raises RootError if report.md points outside the root.
+    """
+    # Drafts are normal during the event and the report is assembled at the
+    # midpoint, so draft mode doesn't even open report.md.
+    if not final:
+        return None
+    path = resolve_in_root(root, REPORT_FILE)
+    if not path.exists():
+        # Not an error: the report may be finished in another tool. The
+        # loud status line makes sure nobody thinks it was checked.
+        return {"status": REPORT_FILE + " NOT FOUND: report not checked", "checks": {}}
+    text = read_markdown(path)
+    markers = hit_diagnostics(scan_leftover_markers(REPORT_FILE, text), "leftover marker")
+    older = hit_diagnostics(scan_older_leftovers(REPORT_FILE, text), "older-style leftover")
+    # check_problems() gives the levels: a leftover marker blocks --final,
+    # an older-style leftover is only a warning.
+    checks = {
+        "leftover markers": check_problems("leftover markers", markers, final),
+        "older-style leftovers": check_problems("older-style leftovers", older, final),
+    }
+    count = len(checks["leftover markers"]) + len(checks["older-style leftovers"])
+    return {"status": REPORT_FILE + " checked: " + str(count) + " problems", "checks": checks}
+
+
+def render_qa_report(final, readiness, checks, report):
+    """Return the text of build/qa-report.txt.
+
+    `readiness` is a list of (file_name, summary) pairs, one per finding,
+    where summary is the readiness line from finding_readiness(), printed as
+    it is. `checks` maps every name in QA_CHECKS to that check's problems, as
+    (level, file_name, line_number, message); an empty list means the check
+    ran and found nothing. Every check gets a PASS or FAIL line, then its
+    problems. `report` is the check_report() result: None in draft mode, and
+    in --final its own "report.md:" section. Raises ValueError if a check is
+    missing or unknown, or if --final has no report.md result.
+    """
+    # Every check must be given, even with no problems: a check the caller
+    # forgot to run must not show PASS. A misspelt name is refused too.
+    for name in QA_CHECKS:
+        if name not in checks:
+            raise ValueError("QA check not run: " + name)
+    for name in checks:
+        if name not in QA_CHECKS:
+            raise ValueError("unknown QA check: " + name)
+    # In --final, report.md must have been checked (or found absent), so a
+    # forgotten check can't look like a clean report.
+    if final and report is None:
+        raise ValueError("--final QA report needs the report.md result")
+    if final:
+        lines = ["QA report (--final): any ERROR below fails the run"]
+    else:
+        lines = ["QA report (draft mode): problems are warnings"]
+
+    lines += ["", "Findings:"]
+    if not readiness:
+        lines.append("  no finding files found")
+    for file_name, summary in readiness:
+        lines.append("  " + file_name + ": " + summary)
+
+    lines += ["", "Checks:"]
+    for name in QA_CHECKS:
+        problems = checks[name]
+        lines.append(check_status(problems) + " " + name)
+        for problem in problems:
+            lines.append("  " + problem_line(problem))
+
+    # report.md gets its own section, apart from the findings' checks.
+    if report is not None:
+        lines += ["", REPORT_FILE + ":", report["status"]]
+        for name, problems in report["checks"].items():
+            lines.append(check_status(problems) + " " + name)
+            for problem in problems:
+                lines.append("  " + problem_line(problem))
+    return "\n".join(lines) + "\n"
+
+
+def check_finding(file_name, text, final):
+    """Run every check that looks at one finding file on its own.
+
+    Returns a dict:
+      name, heading     the file name, and the parse_finding_heading() result
+      status, summary   READY or DRAFT, and the readiness line
+      row               its summary_row() for findings-summary.md
+      combined          its render_combined_findings() entry
+      checks            check name -> problems, as (level, file_name,
+                        line_number, message), for the per-finding checks
+    The checks across files (duplicate IDs, index, timeline) are run by
+    collect_qa().
+    """
+    heading = parse_finding_heading(file_name, text)
+    parsed = parse_labelled_fields(file_name, text)
+    fields = parsed["fields"]
+    severity, severity_diagnostics = severity_value(file_name, fields)
+    hits = scan_leftover_markers(file_name, text)
+    status, summary = finding_readiness(
+        hits, missing_required_fields(fields), severity, heading["title"])
+    older = scan_older_leftovers(file_name, text)
+    diagnostics = {
+        "finding headings": heading["diagnostics"],
+        "labelled lines": parsed["diagnostics"],
+        "severity": severity_diagnostics,
+        "required fields": check_required_fields(file_name, fields),
+        "leftover markers": hit_diagnostics(hits, "leftover marker"),
+        "older-style leftovers": hit_diagnostics(older, "older-style leftover"),
+        "reproduction steps": check_reproduction(file_name, text),
+        "references": check_references(file_name, fields),
+        "CVSS version": check_cvss_version(file_name, fields, parsed["cvss_vector"]),
+        "summary table": check_table_pipes(file_name, heading, fields),
+    }
+    checks = {}
+    for check_name, found in diagnostics.items():
+        checks[check_name] = check_problems(check_name, found, final)
+    return {
+        "name": file_name,
+        "heading": heading,
+        "status": status,
+        "summary": summary,
+        "row": summary_row(heading, fields, severity),
+        "combined": {"id": heading["id"], "severity": severity, "status": status,
+                     "summary": summary, "text": text},
+        "checks": checks,
+    }
+
+
+def collect_qa(root, index, final):
+    """Read every input in the working copy and run every QA check.
+
+    Returns a dict:
+      findings    one check_finding() result per finding file, in path order
+      timeline    one parse_timeline_entry() result per timeline file
+      checks      every name in QA_CHECKS -> its problems
+      report      the check_report() result (None in draft mode)
+    File names are shown relative to the root, e.g. findings/F-001-x.md.
+    Raises RootError if a path points outside the root.
+    """
+    root = Path(root).resolve()
+    checks = {}
+    for name in QA_CHECKS:
+        checks[name] = []
+
+    findings = []
+    for path in discover_findings(root):
+        finding = check_finding(path.relative_to(root).as_posix(), read_markdown(path), final)
+        findings.append(finding)
+        for check_name, problems in finding["checks"].items():
+            checks[check_name] += problems
+
+    headings = [(finding["name"], finding["heading"]) for finding in findings]
+    locations = finding_id_locations(headings)
+    checks["duplicate finding IDs"] = check_problems(
+        "duplicate finding IDs", check_duplicate_ids(locations), final)
+    # The loader gives its own levels, so its problems are added as they are.
+    index_ids, index_problems = load_index_ids(root, index, final)
+    # The same shown name as the loader's problems, so both name one file.
+    shown_index = index_location(root, index)[1]
+    membership = check_index_membership(locations, index_ids, shown_index)
+    checks["findings index"] = index_problems + check_problems(
+        "findings index", membership, final)
+
+    timeline = []
+    for path in discover_timeline_files(root):
+        entry = parse_timeline_entry(path.relative_to(root).as_posix(), read_markdown(path))
+        timeline.append(entry)
+        checks["interactions timeline"] += check_problems(
+            "interactions timeline", entry["diagnostics"], final)
+
+    return {"findings": findings, "timeline": timeline, "checks": checks,
+            "report": check_report(root, final)}
+
+
+def all_problems(collected):
+    """Return every QA problem in a collect_qa() result, report.md's included."""
+    problems = []
+    for name in QA_CHECKS:
+        problems += collected["checks"][name]
+    if collected["report"] is not None:
+        for report_problems in collected["report"]["checks"].values():
+            problems += report_problems
+    return problems
+
+
+def qa_summary_line(collected):
+    """Return "QA: N findings; R READY; D DRAFT; W warnings; E errors"."""
+    findings = collected["findings"]
+    ready = len([finding for finding in findings if finding["status"] == "READY"])
+    warnings, errors = count_levels(all_problems(collected))
+    return ("QA: " + str(len(findings)) + " findings; " + str(ready) + " READY; "
+            + str(len(findings) - ready) + " DRAFT; " + str(warnings) + " warnings; "
+            + str(errors) + " errors")
+
+
+# The four files every run writes, in build/ (in this order on screen).
+BUILD_FOLDER = "build"
+OUTPUT_FILES = ["findings-summary.md", "interactions-timeline.md",
+                "findings-combined.md", "qa-report.txt"]
+
+
+def build_path(root, relative_path):
+    """Return root/relative_path for writing, or raise RootError.
+
+    Writing follows links, so a link at build/ or at an output file could
+    make the tool overwrite report.md or write into incoming/. Both kinds
+    are refused: a symlink, and an existing file with another hard link.
+    This is stricter than resolve_in_root(), which allows a symlink that
+    stays inside the root (DECISIONS 2026-10-21 C-21 build/ links).
+    """
+    root = Path(root).resolve()
+    path = resolve_in_root(root, relative_path)
+    # A symlink resolves somewhere else, so the path must resolve to exactly
+    # where it says.
+    if path != root / relative_path:
+        raise RootError("build output is a link; remove it: " + str(relative_path))
+    # A hard link is the same file under two names (e.g. report.md), so
+    # writing one would change the other. st_nlink counts the names; only
+    # files are checked, since a folder always has more than one.
+    if path.is_file() and path.stat().st_nlink > 1:
+        raise RootError("build output has another hard link; remove it: " + str(relative_path))
+    return path
+
+
+def readiness_lines(collected):
+    """Return (file_name, readiness summary) for each finding, for the QA report."""
+    return [(finding["name"], finding["summary"]) for finding in collected["findings"]]
+
+
+def write_outputs(root, collected, final):
+    """Write the four build/ files and return the lines for the screen.
+
+    `collected` comes from collect_qa(). Each file is rewritten from scratch,
+    so nothing stale is left in it; report.md is never written. The lines are
+    one "WROTE <path>" per file, one "WARNING: ..." or "ERROR: ..." per QA
+    problem, the report.md status line (--final only), then the QA summary.
+    """
+    findings = collected["findings"]
+    texts = {
+        "findings-summary.md": render_findings_summary(
+            [finding["row"] for finding in findings]),
+        "interactions-timeline.md": render_timeline(collected["timeline"]),
+        "findings-combined.md": render_combined_findings(
+            [finding["combined"] for finding in findings]),
+        "qa-report.txt": render_qa_report(
+            final, readiness_lines(collected), collected["checks"], collected["report"]),
+    }
+    # Check build/ and all four paths before writing anything, so a refused
+    # path leaves every file as it was instead of a half-updated build/.
+    build = build_path(root, BUILD_FOLDER)
+    paths = {}
+    for file_name in OUTPUT_FILES:
+        path = build_path(root, Path(BUILD_FOLDER) / file_name)
+        # e.g. a folder named qa-report.txt, which can't be opened for writing.
+        if path.exists() and not path.is_file():
+            raise RootError("build output is not a file; remove it: "
+                            + str(Path(BUILD_FOLDER) / file_name))
+        paths[file_name] = path
+    build.mkdir(exist_ok=True)
+    lines = []
+    for file_name in OUTPUT_FILES:
+        # newline="" writes the text exactly, so a finding's "\r\n" line
+        # endings reach findings-combined.md unchanged.
+        with paths[file_name].open("w", encoding="utf-8", newline="") as handle:
+            handle.write(texts[file_name])
+        lines.append("WROTE " + str(paths[file_name]))
+    for problem in all_problems(collected):
+        lines.append(problem_line(problem))
+    if collected["report"] is not None:
+        lines.append(collected["report"]["status"])
+    lines.append(qa_summary_line(collected))
+    return lines
+
+
+def pandoc_hint(root):
+    """Return the pandoc command line hint, or None if pandoc isn't installed.
+
+    The tool only shows the command; it never runs it (no command execution).
+    """
+    # which() only looks pandoc up on PATH; it runs nothing.
+    if shutil.which("pandoc") is None:
+        return None
+    root = Path(root).resolve()
+    # shlex.quote() keeps a path with spaces in it one argument when pasted.
+    report = shlex.quote(str(root / REPORT_FILE))
+    output = shlex.quote(str(root / BUILD_FOLDER / "report.docx"))
+    return ("HINT: to convert the report, run: pandoc " + report + " -o " + output
+            + " (or end it in report.pdf; PDF also needs a LaTeX engine)")
+
+
+def run(root, index, final):
+    """Compile the working copy and return (exit_code, qa_text, lines).
+
+    qa_text is the text of build/qa-report.txt; lines are the screen lines.
+    Nothing is printed, so the notebook's Compile button can call this too.
+    Exit code 0: success, or draft mode with any number of warnings.
+    1: --final found at least one error. 2: the tool couldn't run (bad
+    root, a path outside the root, or a file it can't read or write).
+    """
+    try:
+        root = validate_root(root)
+        collected = collect_qa(root, index, final)
+        lines = write_outputs(root, collected, final)
+    except (RootError, InputError, OSError) as error:
+        # A problem with the setup or the files, not a QA result: say what
+        # it is instead of showing a Python traceback.
+        return 2, "", ["compile failed: " + str(error)]
+    qa_text = render_qa_report(final, readiness_lines(collected),
+                               collected["checks"], collected["report"])
+    hint = pandoc_hint(root)
+    if hint is not None:
+        lines.append(hint)
+    # Draft mode has no errors (every problem is a warning), so it gives 0.
+    errors = count_levels(all_problems(collected))[1]
+    if final and errors > 0:
+        return 1, qa_text, lines
+    return 0, qa_text, lines
+
+
+def main(argv=None):
+    """Run from the command line: print the screen lines, return the exit code."""
+    args = parse_args(argv)
+    exit_code, qa_text, lines = run(args.root, args.index, args.final)
+    for line in lines:
+        print(line)
+    return exit_code
+
+
+# Only runs when started as `python3 tools/compile.py`, never on import, so
+# the notebook and the tests can import this file without side effects.
+if __name__ == "__main__":
+    sys.exit(main())
