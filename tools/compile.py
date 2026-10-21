@@ -224,16 +224,13 @@ def parse_finding_heading(file_name, text):
                         the filename has one
       title             the text after "ID:", as written, or None
       line              the heading's line number (from 1), or None
-      heading_markers   leftover markers on the heading line, e.g. 1 for an
-                        unfilled [[FINDING_ID]]
       diagnostics       (file_name, line_number, message) problems
     Heading problems (ID mismatch, wrong heading level, no heading, no
     title) are reported only here, so no other check repeats them.
     """
     match = FILENAME_ID_RE.match(Path(file_name).name)
     filename_id = match.group(0) if match else None
-    result = {"id": filename_id, "title": None, "line": None,
-              "heading_markers": 0, "diagnostics": []}
+    result = {"id": filename_id, "title": None, "line": None, "diagnostics": []}
     found = find_title_heading(text)
     if found is None:
         result["diagnostics"].append(
@@ -244,8 +241,6 @@ def parse_finding_heading(file_name, text):
     hashes, heading_id, title = heading.groups()
     result["title"] = title
     result["line"] = line_number
-    # group(0) is the whole heading line, since HEADING_RE runs from ^ to $.
-    result["heading_markers"] = len(LEFTOVER_RE.findall(heading.group(0)))
     # Findings use ### for the title and #### for sections, so they nest
     # under the report's "## 5. Detailed Findings" without changes.
     if hashes != "###":
@@ -655,3 +650,391 @@ def check_cvss_version(file_name, fields, cvss_vector):
         return []
     return [(file_name, field["line"],
              "CVSS vector is not a full CVSS 3.1 vector: " + vector)]
+
+
+def finding_id_locations(headings):
+    """Return (file_name, line_number, finding_id) for each finding with an ID.
+
+    `headings` is a list of (file_name, heading) pairs, where heading is the
+    dict from parse_finding_heading(), so the ID is the one the heading
+    parser chose. A finding with no ID is left out: parse_finding_heading()
+    already reports it.
+    """
+    locations = []
+    for file_name, heading in headings:
+        if heading["id"] is None:
+            continue
+        line_number = heading["line"]
+        if line_number is None:
+            # No title heading: parse_finding_heading() reports that at
+            # line 1, so point there too.
+            line_number = 1
+        locations.append((file_name, line_number, heading["id"]))
+    return locations
+
+
+def check_duplicate_ids(locations):
+    """Return one problem per finding ID used by more than one file.
+
+    `locations` comes from finding_id_locations(). The problem is placed at
+    the first file and its message names every file with that ID, so each
+    copy can be found. Each problem is (file_name, line_number, message).
+    """
+    files_by_id = {}
+    for file_name, line_number, finding_id in locations:
+        files_by_id.setdefault(finding_id, []).append((file_name, line_number))
+    problems = []
+    for finding_id in sorted(files_by_id):
+        places = files_by_id[finding_id]
+        if len(places) > 1:
+            names = [file_name for file_name, line_number in places]
+            first_file, first_line = places[0]
+            problems.append((first_file, first_line,
+                             "duplicate finding ID " + finding_id + " in: " + ", ".join(names)))
+    return problems
+
+
+def check_index_membership(locations, index_ids, index_file):
+    """Return problems for finding IDs missing from, or extra to, the index.
+
+    `locations` comes from finding_id_locations(); `index_ids` comes from
+    load_index_ids(), and `index_file` is the index's name to show. An ID in
+    a finding file but not in the index is reported at the finding; an ID in
+    the index but in no finding file is reported at its index line. Each
+    problem is (file_name, line_number, message).
+    """
+    if index_ids is None:
+        # The index is absent or unusable: load_index_ids() already warned,
+        # and comparing against nothing would flag every finding as extra.
+        return []
+    problems = []
+    file_ids = set()
+    for file_name, line_number, finding_id in locations:
+        file_ids.add(finding_id)
+        if finding_id not in index_ids:
+            problems.append((file_name, line_number,
+                             finding_id + " is not in the findings index " + index_file))
+    # index_ids keeps the file's row order, so these follow the index lines.
+    for finding_id, line_number in index_ids.items():
+        if finding_id not in file_ids:
+            problems.append((index_file, line_number,
+                             finding_id + " is in the findings index but no finding file has it"))
+    return problems
+
+
+def finding_readiness(leftover_hits, missing_fields, severity, title):
+    """Return (status, summary) for one finding: READY or DRAFT.
+
+    leftover_hits comes from scan_leftover_markers() on the whole file,
+    missing_fields from missing_required_fields(), severity from
+    severity_value() and title from parse_finding_heading(). READY needs no
+    leftover markers, no missing required fields, a severity word and a
+    title (DECISIONS 2026-10-20 C-15). summary is "READY", or "DRAFT: "
+    with both counts plus any other reason, for the QA report.
+    """
+    # The heading's own markers are among the whole-file hits, so they
+    # aren't counted separately.
+    # A misspelled severity (e.g. "high") would leave a blank Severity cell
+    # in the summary table (C-15 Q2). A blank title has no marker for the
+    # leftover check to count (C-15 Q3); title is None when there is no
+    # heading at all.
+    if not leftover_hits and not missing_fields and severity is not None and title:
+        return "READY", "READY"
+    reasons = [str(len(leftover_hits)) + " unresolved markers",
+               str(len(missing_fields)) + " missing fields"]
+    if severity is None:
+        reasons.append("no severity word")
+    if not title:
+        reasons.append("no title")
+    return "DRAFT", "DRAFT: " + ", ".join(reasons)
+
+
+def draft_banner(summary):
+    """Return the line put before a draft in findings-combined.md.
+
+    `summary` is the readiness line from finding_readiness(), shown as it
+    is, so the banner says every reason the finding is a draft (DECISIONS
+    2026-10-20 Chunk 4 CR-3), e.g.
+    [[NOTE: DRAFT: 0 unresolved markers, 0 missing fields, no severity word]].
+    It is itself a marker, so if a draft is pasted into report.md with its
+    banner, the --final leftover check of report.md reports it.
+    """
+    return "[[NOTE: " + summary + "]]"
+
+
+# The labelled fields that go into the summary table as written, so a "|"
+# in them is checked (DECISIONS 2026-10-20 C-16). The title is checked
+# separately; the ID is always F-NNN and Severity is a fixed word, so
+# neither can hold a "|".
+TABLE_TEXT_LABELS = ["Affected assets", "Status"]
+
+
+def field_value(fields, label):
+    """Return a labelled field's value as written, or "" if it is missing."""
+    if label in fields:
+        return fields[label]["value"]
+    return ""
+
+
+def summary_row(heading, fields, severity):
+    """Return one finding's summary-table cells as a dict.
+
+    `heading` comes from parse_finding_heading(), `fields` from
+    parse_labelled_fields() and `severity` from severity_value(). Values are
+    kept exactly as written; anything missing becomes a blank cell.
+    """
+    return {
+        "id": heading["id"] or "",
+        "title": heading["title"] or "",
+        "severity": severity or "",
+        "assets": field_value(fields, "Affected assets"),
+        "status": field_value(fields, "Status"),
+    }
+
+
+def has_unescaped_pipe(text):
+    """Return True if text holds a "|" that isn't written as "\\|"."""
+    # "\|" is how Markdown writes a "|" inside a table cell, and it doesn't
+    # break the table, so it is removed before looking (DECISIONS 2026-10-20
+    # Chunk 4 CR-4). The text itself is never changed.
+    return "|" in text.replace("\\|", "")
+
+
+def check_table_pipes(file_name, heading, fields):
+    """Return a warning for each summary cell whose text holds a "|".
+
+    A "|" would split the cell and break the Markdown table, so it is
+    reported, but the text is left as written. An escaped "\\|" is fine.
+    Each problem is (file_name, line_number, message).
+    """
+    # Name the finding by ID when it has one, so a teammate's finding is
+    # easy to find in the table.
+    name = heading["id"] or file_name
+    problems = []
+    if heading["title"] and has_unescaped_pipe(heading["title"]):
+        problems.append((file_name, heading["line"],
+                         name + ": '|' in Title breaks the summary table"))
+    for label in TABLE_TEXT_LABELS:
+        if label in fields and has_unescaped_pipe(fields[label]["value"]):
+            problems.append((file_name, fields[label]["line"],
+                             name + ": '|' in " + label + " breaks the summary table"))
+    return problems
+
+
+def table_line(cells):
+    """Return one Markdown table line from a list of cell texts."""
+    return "| " + " | ".join(cells) + " |"
+
+
+def summary_sort_key(row):
+    """Return the sort key for one summary_row(): Critical first, then by ID."""
+    # A blank Severity cell isn't a level, so it sorts last, like None.
+    return finding_sort_key(row["id"], row["severity"])
+
+
+def render_findings_summary(rows):
+    """Return the text of build/findings-summary.md.
+
+    `rows` is a list of summary_row() dicts. The findings table is sorted
+    Critical first, then by ID, with no-severity findings last. The count
+    table shows every level, zeros included, and Total counts every row.
+    """
+    rows = sorted(rows, key=summary_sort_key)
+    lines = ["## Findings", "",
+             table_line(["ID", "Title", "Severity", "Affected assets", "Status"]),
+             table_line(["---"] * 5)]
+    for row in rows:
+        lines.append(table_line([row["id"], row["title"], row["severity"],
+                                 row["assets"], row["status"]]))
+
+    counts = []
+    for level in SEVERITIES:
+        level_rows = [row for row in rows if row["severity"] == level]
+        counts.append(str(len(level_rows)))
+    # Total is every row, so a finding with no severity is still counted.
+    counts.append(str(len(rows)))
+    lines += ["", "## Severity counts", "",
+              table_line(SEVERITIES + ["Total"]),
+              table_line(["---"] * 6),
+              table_line(counts)]
+    return "\n".join(lines) + "\n"
+
+
+# The three timeline file types (OQ-11: no other type), by filename prefix:
+# the Type column text, and the labelled line that holds the file's time.
+TIMELINE_TYPES = {
+    "IR": ("Incident", "Time reported"),
+    "SU": ("Status update", "Time"),
+    "INJ": ("Inject", "Sent"),
+}
+
+# A timeline time: a date and a time (OQ-01). Written this way, sorting the
+# text also sorts by time.
+TIMELINE_TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
+
+# The file's top heading, e.g. `# Incident Report IR-001`: exactly one "#".
+TOP_HEADING_RE = re.compile(r"^#[ \t]+(.*)$")
+
+
+def child_folders(root, folder):
+    """Return folder/<name> for each folder inside root/folder.
+
+    Returns [] if root/folder doesn't exist, since a working copy may not
+    have field-notes/ yet. Each entry is checked with resolve_in_root()
+    before it is used, so a symlink pointing outside the root raises
+    RootError instead of being followed.
+    """
+    path = resolve_in_root(root, folder)
+    children = []
+    if path.is_dir():
+        for entry in path.iterdir():
+            child = Path(folder) / entry.name
+            # Check where the entry points before asking if it is a folder:
+            # is_dir() follows a symlink, so it would look outside first.
+            if resolve_in_root(root, child).is_dir():
+                children.append(child)
+    return children
+
+
+def timeline_folders(root):
+    """Return the folders that hold timeline files, relative to root.
+
+    These are field-notes/<name>/ and incoming/<owner>/field-notes/<name>/.
+    """
+    folders = child_folders(root, "field-notes")
+    for owner in child_folders(root, "incoming"):
+        folders += child_folders(root, owner / "field-notes")
+    return folders
+
+
+def discover_timeline_files(root):
+    """Return every IR-, SU- and INJ- file for the timeline, sorted by path.
+
+    Raises RootError if a folder or file there points outside the root.
+    NOTE- files aren't interactions, so they are never listed (OQ-11).
+    """
+    root = Path(root).resolve()
+    files = []
+    for folder in timeline_folders(root):
+        for prefix in TIMELINE_TYPES:
+            for path in (root / folder).glob(prefix + "-*.md"):
+                # A single file can be a symlink too, so check it as well.
+                resolve_in_root(root, folder / path.name)
+                if path.is_file():
+                    files.append(path)
+    # Sorted so every run gives the same order, like discover_findings().
+    return sorted(files)
+
+
+def parse_timeline_entry(file_name, text):
+    """Return one timeline file's row data and its problems.
+
+    `file_name` must start with IR-, SU- or INJ-, as every file from
+    discover_timeline_files() does. The result is a dict:
+      type          Incident, Status update or Inject, from the prefix
+      time          the labelled time as written, or "" if the line is missing
+      time_ok       True only if time is YYYY-MM-DD HH:MM
+      summary       the "# " heading's text as written, or ""
+      reference     the filename without .md
+      diagnostics   (file_name, line_number, message) problems, or
+                    (file_name, label, message) for a missing time line
+    A file whose time isn't valid is sorted last by the timeline.
+    """
+    name = Path(file_name).name
+    entry_type, time_label = TIMELINE_TYPES[name.split("-", 1)[0]]
+    result = {"type": entry_type, "time": "", "time_ok": False, "summary": "",
+              "reference": Path(file_name).stem, "diagnostics": []}
+    time_line = None
+    heading_found = False
+    # Split on "\n" only, so line numbers match grep -n (see above).
+    for line_number, line in enumerate(text.split("\n"), start=1):
+        # rstrip() also drops the "\r" a Windows line ending leaves behind.
+        line = line.rstrip()
+        heading = TOP_HEADING_RE.match(line)
+        if heading and not heading_found:
+            result["summary"] = heading.group(1)
+            heading_found = True
+            # A "|" would break the timeline table, like the summary table
+            # (DECISIONS 2026-10-20 C-17B): warn, but keep the text as written.
+            if has_unescaped_pipe(result["summary"]):
+                result["diagnostics"].append(
+                    (file_name, line_number,
+                     result["reference"] + ": '|' in Summary breaks the timeline table"))
+        label = LABEL_LINE_RE.match(line)
+        if label and label.group(1) == time_label and time_line is None:
+            result["time"] = label.group(2)
+            time_line = line_number
+
+    if not heading_found:
+        result["diagnostics"].append((file_name, 1, "no '# ' heading; Summary left blank"))
+    if time_line is None:
+        result["diagnostics"].append(
+            (file_name, time_label, "missing labelled line '- **" + time_label + ":**'; sorted last"))
+    elif TIMELINE_TIME_RE.match(result["time"]):
+        result["time_ok"] = True
+    else:
+        # This also catches an unfilled [[DATE]] [[TIME]] marker.
+        result["diagnostics"].append(
+            (file_name, time_line,
+             time_label + " is not YYYY-MM-DD HH:MM: " + result["time"] + "; sorted last"))
+    return result
+
+
+def timeline_sort_key(entry):
+    """Return the sort key for one parse_timeline_entry() result.
+
+    Valid times sort first, as text (YYYY-MM-DD HH:MM text sorts by time).
+    Invalid times sort after all of them. Ties go by reference, so every
+    run gives the same order.
+    """
+    if entry["time_ok"]:
+        return (0, entry["time"], entry["reference"])
+    return (1, "", entry["reference"])
+
+
+def render_timeline(entries):
+    """Return the text of build/interactions-timeline.md.
+
+    `entries` is a list of parse_timeline_entry() results; each one becomes
+    one row, with its values as written.
+    """
+    lines = [table_line(["Time", "Type", "Summary", "Reference"]),
+             table_line(["---"] * 4)]
+    for entry in sorted(entries, key=timeline_sort_key):
+        lines.append(table_line([entry["time"], entry["type"], entry["summary"],
+                                 entry["reference"]]))
+    return "\n".join(lines) + "\n"
+
+
+def combined_sort_key(finding):
+    """Return the sort key for one render_combined_findings() entry."""
+    return finding_sort_key(finding["id"], finding["severity"])
+
+
+def render_combined_findings(findings):
+    """Return the text of build/findings-combined.md.
+
+    `findings` is a list of dicts, one per finding file:
+      id, severity    from parse_finding_heading() and severity_value()
+      status          "READY" or "DRAFT", from finding_readiness()
+      summary         the readiness line, also from finding_readiness()
+      text            the file's full text
+    Findings come in finding_sort_key() order, each one's text unchanged
+    except that a missing final line break is added, so its ### and ####
+    headings nest under the report's Section 5. A draft gets the
+    draft_banner() line immediately before it.
+    """
+    parts = []
+    # sorted() keeps the given order for equal keys, so two files with the
+    # same ID stay in path order.
+    for finding in sorted(findings, key=combined_sort_key):
+        text = finding["text"]
+        # Without a final line break, the next finding's heading would be
+        # glued onto this finding's last line.
+        if not text.endswith("\n"):
+            text += "\n"
+        if finding["status"] == "DRAFT":
+            text = draft_banner(finding["summary"]) + "\n" + text
+        parts.append(text)
+    # A blank line between findings keeps each one a separate block.
+    return "\n".join(parts)

@@ -107,6 +107,48 @@ def make_complete_finding(finding_id="F-001", title="Default admin password on w
     return COMPLETE_FINDING.format(finding_id=finding_id, title=title)
 
 
+# A short fake findings-library entry, shaped like templates/finding.md: the
+# general text is written, but the event-specific fields are still markers,
+# as findings-library/README.md describes. Only {title}, {severity} and
+# {technical_detail} are filled by .format().
+LIBRARY_ENTRY = """\
+### [[FINDING_ID]]: {title}
+
+[[NOTE: Library text is general. Check every section against the real finding.]]
+
+- **Severity:** {severity}
+- **CVSS 3.1:** `[[CVSS_VECTOR]]` ([[CVSS_SCORE]])
+- **Why this severity:** [[SEVERITY_RATIONALE]]
+- **Likelihood:** [[LIKELIHOOD]]
+- **Affected assets:** [[HOST]] ([[HOST_IP]]), [[ACCOUNT]]
+- **Discovered by / when:** [[TESTER]], [[DATE]] [[TIME]]
+- **Status:** [[CHOOSE: Confirmed / Exploited / Suspected]]
+- **References:** CWE-[[CWE_ID]], https://example.invalid/library/example-entry
+
+#### Summary
+An example service on a fake host accepts an unsafe example setting, so an attacker could misuse it.
+
+#### Technical detail
+{technical_detail}
+
+#### Reproduction steps
+Starting position: [[STARTING_POSITION]]
+
+[[REPRODUCTION_STEPS]]
+
+#### Remediation
+- **Immediate:** [[IMMEDIATE_FIX]]
+- **Longer term:** Review the example setting on every host before it goes live.
+"""
+
+
+def make_library_entry(title="Example unsafe service setting", severity="High",
+                       technical_detail="The example setting is on by default."):
+    """Return the text of a fake findings-library entry."""
+    return LIBRARY_ENTRY.format(title=title, severity=severity,
+                                technical_detail=technical_detail)
+
+
 def remove_worktree(root):
     """Delete one test's folder, and refuse anything else.
 

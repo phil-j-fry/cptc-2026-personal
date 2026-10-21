@@ -254,7 +254,6 @@ class ParseFindingHeadingTests(unittest.TestCase):
             "id": "F-001",
             "title": "Default admin password on web01",
             "line": 1,
-            "heading_markers": 0,
             "diagnostics": [],
         })
 
@@ -263,15 +262,20 @@ class ParseFindingHeadingTests(unittest.TestCase):
         result = compile.parse_finding_heading("incoming/alice/findings/F-007-smb.md", text)
         self.assertEqual(result["id"], "F-007")
         self.assertEqual(result["title"], "SMB signing not required")
-        self.assertEqual(result["heading_markers"], 1)
         self.assertEqual(result["diagnostics"], [])
+        # The marker is counted by the whole-file leftover scan, not here.
+        hits = compile.scan_leftover_markers("f.md", text)
+        self.assertEqual(hits, [("f.md", 1, "[[FINDING_ID")])
 
     def test_untouched_template_heading(self):
         path = support.TOOLS_DIR.parent / "templates" / "finding.md"
-        result = compile.parse_finding_heading("findings/F-003-x.md", path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        result = compile.parse_finding_heading("findings/F-003-x.md", text)
         self.assertEqual(result["id"], "F-003")
         self.assertEqual(result["title"], "[[FINDING_TITLE]]")
-        self.assertEqual(result["heading_markers"], 2)
+        hits = compile.scan_leftover_markers("f.md", text)
+        self.assertEqual([hit[2] for hit in hits if hit[1] == result["line"]],
+                         ["[[FINDING_ID", "[[FINDING_TITLE"])
 
     def test_heading_and_filename_mismatch(self):
         text = support.make_complete_finding("F-002")
@@ -769,6 +773,614 @@ class CheckCvssVersionTests(unittest.TestCase):
 
     def test_missing_line_not_reported_twice(self):
         self.assertEqual(compile.check_cvss_version("f.md", {}, None), [])
+
+
+def id_locations(root):
+    """Discover and parse a fake root's findings the way the tool does."""
+    headings = []
+    for path in compile.discover_findings(root):
+        name = path.relative_to(root.resolve()).as_posix()
+        text = path.read_text(encoding="utf-8")
+        headings.append((name, compile.parse_finding_heading(name, text)))
+    return compile.finding_id_locations(headings)
+
+
+class FindingIdLocationsTests(unittest.TestCase):
+    def test_heading_id_and_line_are_used(self):
+        root = support.make_worktree(self, {
+            "findings/F-001-x.md": "\n" + support.make_complete_finding("F-002"),
+        })
+        self.assertEqual(id_locations(root), [("findings/F-001-x.md", 2, "F-002")])
+
+    def test_unfilled_heading_uses_the_filename_id(self):
+        root = support.make_worktree(self, {"findings/F-003-x.md": "### [[FINDING_ID]]: Draft\n"})
+        self.assertEqual(id_locations(root), [("findings/F-003-x.md", 1, "F-003")])
+
+    def test_no_heading_points_at_line_1(self):
+        root = support.make_worktree(self, {"findings/F-004-x.md": "notes only\n"})
+        self.assertEqual(id_locations(root), [("findings/F-004-x.md", 1, "F-004")])
+
+    def test_finding_without_any_id_is_left_out(self):
+        root = support.make_worktree(self, {"findings/F-draft.md": "### [[FINDING_ID]]: Draft\n"})
+        self.assertEqual(id_locations(root), [])
+
+
+class CheckDuplicateIdsTests(unittest.TestCase):
+    def check(self, files):
+        return compile.check_duplicate_ids(id_locations(support.make_worktree(self, files)))
+
+    def test_duplicate_within_one_folder(self):
+        self.assertEqual(self.check({
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "findings/F-001-b.md": support.make_complete_finding("F-001"),
+        }), [("findings/F-001-a.md", 1,
+              "duplicate finding ID F-001 in: findings/F-001-a.md, findings/F-001-b.md")])
+
+    def test_duplicate_local_versus_incoming(self):
+        self.assertEqual(self.check({
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "incoming/alice/findings/F-001-b.md": support.make_complete_finding("F-001"),
+        }), [("findings/F-001-a.md", 1,
+              "duplicate finding ID F-001 in: findings/F-001-a.md, "
+              "incoming/alice/findings/F-001-b.md")])
+
+    def test_duplicate_across_two_incoming_owners(self):
+        self.assertEqual(self.check({
+            "incoming/alice/findings/F-004-a.md": support.make_complete_finding("F-004"),
+            "incoming/bob/findings/F-004-b.md": support.make_complete_finding("F-004"),
+        }), [("incoming/alice/findings/F-004-a.md", 1,
+              "duplicate finding ID F-004 in: incoming/alice/findings/F-004-a.md, "
+              "incoming/bob/findings/F-004-b.md")])
+
+    def test_three_copies_give_one_problem_naming_every_path(self):
+        problems = self.check({
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "incoming/alice/findings/F-001-b.md": support.make_complete_finding("F-001"),
+            "incoming/bob/findings/F-001-c.md": support.make_complete_finding("F-001"),
+        })
+        self.assertEqual(len(problems), 1)
+        for name in ("findings/F-001-a.md", "incoming/alice/findings/F-001-b.md",
+                     "incoming/bob/findings/F-001-c.md"):
+            self.assertIn(name, problems[0][2])
+
+    def test_unique_ids_pass(self):
+        self.assertEqual(self.check({
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "incoming/alice/findings/F-002-b.md": support.make_complete_finding("F-002"),
+        }), [])
+
+    def test_compares_the_heading_id_and_leaves_the_mismatch_to_the_heading_check(self):
+        # F-001-x.md has an F-002 heading, so it clashes with F-002-y.md. The
+        # filename/heading mismatch itself is reported only by C-05.
+        problems = self.check({
+            "findings/F-001-x.md": support.make_complete_finding("F-002"),
+            "findings/F-002-y.md": support.make_complete_finding("F-002"),
+        })
+        self.assertEqual(problems, [("findings/F-001-x.md", 1,
+                                     "duplicate finding ID F-002 in: findings/F-001-x.md, "
+                                     "findings/F-002-y.md")])
+
+    def test_unfilled_heading_counts_by_its_filename_id(self):
+        self.assertEqual(len(self.check({
+            "findings/F-003-a.md": "### [[FINDING_ID]]: Draft\n",
+            "incoming/alice/findings/F-003-b.md": support.make_complete_finding("F-003"),
+        })), 1)
+
+
+class CheckIndexMembershipTests(unittest.TestCase):
+    def check(self, files):
+        root = support.make_worktree(self, files)
+        index_ids = compile.load_index_ids(root, None, True)[0]
+        return compile.check_index_membership(id_locations(root), index_ids,
+                                              "tracker/findings-index.csv")
+
+    def test_missing_and_extra_ids_are_reported(self):
+        self.assertEqual(self.check({
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,a,,,,,\nF-003,c,,,,,\n",
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "incoming/alice/findings/F-002-b.md": support.make_complete_finding("F-002"),
+        }), [
+            ("incoming/alice/findings/F-002-b.md", 1,
+             "F-002 is not in the findings index tracker/findings-index.csv"),
+            ("tracker/findings-index.csv", 3,
+             "F-003 is in the findings index but no finding file has it"),
+        ])
+
+    def test_matching_index_passes(self):
+        self.assertEqual(self.check({
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,a,,,,,\nF-002,b,,,,,\n",
+            "findings/F-001-a.md": support.make_complete_finding("F-001"),
+            "findings/F-002-b.md": support.make_complete_finding("F-002"),
+        }), [])
+
+    def test_absent_or_unusable_index_reports_neither(self):
+        findings = {"findings/F-002-b.md": support.make_complete_finding("F-002")}
+        for index_text in (None, INDEX_HEADER, '"F-001"x,y\n', "title,severity\nx,High\n"):
+            files = dict(findings)
+            if index_text is not None:
+                files["tracker/findings-index.csv"] = index_text
+            self.assertEqual(self.check(files), [], index_text)
+
+
+def readiness_of(text):
+    """Run one finding through the checks that decide READY or DRAFT."""
+    heading = compile.parse_finding_heading("f.md", text)
+    fields = compile.parse_labelled_fields("f.md", text)["fields"]
+    severity = compile.severity_value("f.md", fields)[0]
+    hits = compile.scan_leftover_markers("f.md", text)
+    readiness = compile.finding_readiness(
+        hits, compile.missing_required_fields(fields), severity, heading["title"])
+    return readiness, compile.draft_banner(readiness[1])
+
+
+class FindingReadinessTests(unittest.TestCase):
+    def complete_with(self, old, new):
+        text = support.make_complete_finding()
+        self.assertIn(old, text)
+        return text.replace(old, new)
+
+    def test_complete_finding_is_ready(self):
+        self.assertEqual(readiness_of(support.make_complete_finding())[0], ("READY", "READY"))
+
+    def test_two_leftover_markers_give_draft_and_banner(self):
+        text = self.complete_with("web01 (10.0.0.1)", "[[HOST]] ([[HOST_IP]])")
+        self.assertEqual(readiness_of(text), (
+            ("DRAFT", "DRAFT: 2 unresolved markers, 0 missing fields"),
+            "[[NOTE: DRAFT: 2 unresolved markers, 0 missing fields]]",
+        ))
+
+    def test_heading_marker_is_counted_once(self):
+        text = self.complete_with("### F-001:", "### [[FINDING_ID]]:")
+        self.assertEqual(readiness_of(text)[0],
+                         ("DRAFT", "DRAFT: 1 unresolved markers, 0 missing fields"))
+
+    def test_punctuation_only_value_counts_one_missing_field(self):
+        text = self.complete_with("- **Status:** Exploited", "- **Status:** ()")
+        self.assertEqual(readiness_of(text)[0],
+                         ("DRAFT", "DRAFT: 0 unresolved markers, 1 missing fields"))
+
+    def test_lowercase_severity_is_draft(self):
+        text = self.complete_with("- **Severity:** Critical", "- **Severity:** high")
+        self.assertEqual(readiness_of(text), (
+            ("DRAFT", "DRAFT: 0 unresolved markers, 0 missing fields, no severity word"),
+            "[[NOTE: DRAFT: 0 unresolved markers, 0 missing fields, no severity word]]",
+        ))
+
+    def test_blank_title_is_draft(self):
+        text = support.make_complete_finding(title="")
+        self.assertEqual(readiness_of(text), (
+            ("DRAFT", "DRAFT: 0 unresolved markers, 0 missing fields, no title"),
+            "[[NOTE: DRAFT: 0 unresolved markers, 0 missing fields, no title]]",
+        ))
+
+    def test_no_heading_is_draft(self):
+        text = self.complete_with("### F-001: Default admin password on web01\n", "")
+        self.assertEqual(readiness_of(text)[0],
+                         ("DRAFT", "DRAFT: 0 unresolved markers, 0 missing fields, no title"))
+
+    def test_untouched_template_is_draft_with_every_reason(self):
+        path = support.TOOLS_DIR.parent / "templates" / "finding.md"
+        text = path.read_text(encoding="utf-8")
+        count = len(compile.scan_leftover_markers("f.md", text))
+        self.assertEqual(readiness_of(text), (
+            ("DRAFT", "DRAFT: " + str(count) + " unresolved markers, 5 missing fields, "
+                      "no severity word"),
+            "[[NOTE: DRAFT: " + str(count) + " unresolved markers, 5 missing fields, "
+            "no severity word]]",
+        ))
+
+
+def library_entries(folder):
+    """Return every entry in a findings-library folder, leaving out its README."""
+    return sorted(path for path in folder.glob("*.md") if path.name != "README.md")
+
+
+def check_whole_finding(name, text):
+    """Run every per-finding check on one file and return its readiness."""
+    heading = compile.parse_finding_heading(name, text)
+    parsed = compile.parse_labelled_fields(name, text)
+    fields = parsed["fields"]
+    severity = compile.severity_value(name, fields)[0]
+    compile.check_duplicate_ids(compile.finding_id_locations([(name, heading)]))
+    compile.scan_older_leftovers(name, text)
+    compile.check_reproduction(name, text)
+    compile.check_references(name, fields)
+    compile.check_cvss_version(name, fields, parsed["cvss_vector"])
+    hits = compile.scan_leftover_markers(name, text)
+    return compile.finding_readiness(
+        hits, compile.missing_required_fields(fields), severity, heading["title"])
+
+
+class FindingsLibraryTests(unittest.TestCase):
+    def test_every_real_library_entry_parses(self):
+        folder = support.TOOLS_DIR.parent / "findings-library"
+        # The README must be there, so an empty list below means the folder
+        # really has no entries yet, not that the path is wrong.
+        self.assertTrue((folder / "README.md").is_file())
+        # Since the 2026-10-19 repo split the folder holds only README.md
+        # until finished entries come back from Drive, so today this loop
+        # runs 0 times. The fake entries below cover parsing until then.
+        for path in library_entries(folder):
+            with self.subTest(entry=path.name):
+                check_whole_finding(path.name, path.read_text(encoding="utf-8"))
+
+    def test_fake_library_entries_parse_and_are_draft(self):
+        root = support.make_worktree(self, {
+            "findings-library/README.md": "# Findings Library\n\nNo [[TODO: …]] markers may remain.\n",
+            "findings-library/L01-example-finished.md": support.make_library_entry(),
+            "findings-library/L02-example-todo.md": support.make_library_entry(
+                technical_detail="[[TODO: explain the root cause\nand why it matters]]"),
+            "findings-library/L03-example-choose.md": support.make_library_entry(
+                severity="[[CHOOSE: Critical / High / Medium / Low / Informational]]"),
+        })
+        entries = library_entries(root / "findings-library")
+        self.assertEqual([path.name for path in entries], [
+            "L01-example-finished.md", "L02-example-todo.md", "L03-example-choose.md"])
+        for path in entries:
+            with self.subTest(entry=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertEqual(check_whole_finding(path.name, text)[0], "DRAFT")
+                # DRAFT comes from the C-00A leftover markers.
+                self.assertNotEqual(compile.scan_leftover_markers(path.name, text), [])
+
+
+def summary_inputs(name, text):
+    """Parse one finding into its summary row and its pipe warnings."""
+    heading = compile.parse_finding_heading(name, text)
+    fields = compile.parse_labelled_fields(name, text)["fields"]
+    severity = compile.severity_value(name, fields)[0]
+    return (compile.summary_row(heading, fields, severity),
+            compile.check_table_pipes(name, heading, fields))
+
+
+SUMMARY_GOLDEN = """\
+## Findings
+
+| ID | Title | Severity | Affected assets | Status |
+| --- | --- | --- | --- | --- |
+| F-002 | Default admin password on web01 | Critical | web01 (10.0.0.1), http://10.0.0.1/login, admin | Exploited |
+| F-004 |  | High | web01 (10.0.0.1), http://10.0.0.1/login, admin | Exploited |
+| F-001 | Admin | user portal | Low | web01 (10.0.0.1), http://10.0.0.1/login, admin | Exploited |
+| F-003 | Default admin password on web01 |  | web01 (10.0.0.1), http://10.0.0.1/login, admin | Exploited |
+
+## Severity counts
+
+| Critical | High | Medium | Low | Informational | Total |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1 | 0 | 1 | 0 | 4 |
+"""
+
+
+class RenderFindingsSummaryTests(unittest.TestCase):
+    def finding(self, finding_id, title="Default admin password on web01", severity="Critical"):
+        text = support.make_complete_finding(finding_id, title)
+        return text.replace("- **Severity:** Critical", "- **Severity:** " + severity)
+
+    def test_golden_summary(self):
+        # Given out of order: F-003's lowercase "high" is no severity word,
+        # and F-004's blank title is DRAFT but still listed.
+        inputs = [
+            summary_inputs("findings/F-003-x.md", self.finding("F-003", severity="high")),
+            summary_inputs("findings/F-001-x.md", self.finding("F-001", "Admin | user portal", "Low")),
+            summary_inputs("incoming/alice/findings/F-004-x.md", self.finding("F-004", "", "High")),
+            summary_inputs("findings/F-002-x.md", self.finding("F-002")),
+        ]
+        rows = [row for row, problems in inputs]
+        self.assertEqual(compile.render_findings_summary(rows), SUMMARY_GOLDEN)
+        problems = [problem for row, found in inputs for problem in found]
+        self.assertEqual(problems, [
+            ("findings/F-001-x.md", 1, "F-001: '|' in Title breaks the summary table"),
+        ])
+
+    def test_pipe_in_assets_or_status_warns_without_changing_text(self):
+        text = self.finding("F-005").replace("- **Status:** Exploited", "- **Status:** Exploited | via web01")
+        text = text.replace("admin\n", "admin | backup\n", 1)
+        row, problems = summary_inputs("incoming/bob/findings/F-005-x.md", text)
+        self.assertEqual(row["assets"], "web01 (10.0.0.1), http://10.0.0.1/login, admin | backup")
+        self.assertEqual(row["status"], "Exploited | via web01")
+        self.assertEqual([(line, message) for name, line, message in problems], [
+            (7, "F-005: '|' in Affected assets breaks the summary table"),
+            (9, "F-005: '|' in Status breaks the summary table"),
+        ])
+
+    def test_no_pipe_gives_no_warning(self):
+        self.assertEqual(summary_inputs("f.md", self.finding("F-001"))[1], [])
+
+    def test_missing_fields_give_blank_cells(self):
+        row, problems = summary_inputs("findings/F-006-x.md", "### F-006: Notes only\n")
+        self.assertEqual(row, {"id": "F-006", "title": "Notes only", "severity": "",
+                               "assets": "", "status": ""})
+        self.assertEqual(problems, [])
+
+    def test_no_findings_shows_zero_counts(self):
+        text = compile.render_findings_summary([])
+        self.assertIn("| --- | --- | --- | --- | --- |\n\n## Severity counts", text)
+        self.assertTrue(text.endswith("| 0 | 0 | 0 | 0 | 0 | 0 |\n"))
+
+    def test_escaped_pipe_does_not_warn(self):
+        # "\\|" is Markdown's way to write a "|" inside a table cell.
+        text = self.finding("F-001", "Guest \\| staff portal").replace(
+            "- **Status:** Exploited", "- **Status:** Exploited \\| confirmed")
+        row, problems = summary_inputs("f.md", text)
+        self.assertEqual(row["title"], "Guest \\| staff portal")
+        self.assertEqual(problems, [])
+
+    def test_unescaped_pipe_next_to_an_escaped_one_still_warns(self):
+        row, problems = summary_inputs("f.md", self.finding("F-001", "Guest \\| staff | portal"))
+        self.assertEqual(problems, [("f.md", 1, "F-001: '|' in Title breaks the summary table")])
+
+
+def filled_template(name, replacements):
+    """Return a real template from templates/ with some markers filled in."""
+    text = (support.TOOLS_DIR.parent / "templates" / name).read_text(encoding="utf-8")
+    for marker, value in replacements.items():
+        text = text.replace(marker, value)
+    return text
+
+
+class DiscoverTimelineFilesTests(unittest.TestCase):
+    def names(self, root):
+        return [path.relative_to(root.resolve()).as_posix()
+                for path in compile.discover_timeline_files(root)]
+
+    def test_local_and_incoming_timeline_files_are_found(self):
+        root = support.make_worktree(self, {
+            "field-notes/alice/IR-001-lockout.md": "# Incident Report IR-001\n",
+            "field-notes/alice/SU-midpoint.md": "# Client Status Update\n",
+            "field-notes/alice/INJ-scope.md": "# Inject Response: Scope\n",
+            "incoming/bob/field-notes/bob/IR-002-crash.md": "# Incident Report IR-002\n",
+        })
+        self.assertEqual(self.names(root), [
+            "field-notes/alice/INJ-scope.md",
+            "field-notes/alice/IR-001-lockout.md",
+            "field-notes/alice/SU-midpoint.md",
+            "incoming/bob/field-notes/bob/IR-002-crash.md",
+        ])
+
+    def test_other_files_are_left_out(self):
+        root = support.make_worktree(self, {
+            "field-notes/alice/NOTE-recon.md": "# Recon notes\n",
+            "field-notes/alice/IR-001.txt": "not markdown\n",
+            "field-notes/alice/old/IR-002-x.md": "# nested one level too deep\n",
+            "field-notes/IR-003-x.md": "# not inside a person's folder\n",
+            "incoming/bob/findings/F-001-x.md": support.make_complete_finding(),
+            "incoming/bob/SU-x.md": "# not inside field-notes\n",
+        })
+        self.assertEqual(self.names(root), [])
+
+    def test_no_field_notes_folder_gives_empty_list(self):
+        self.assertEqual(self.names(support.make_worktree(self)), [])
+
+    def assert_refused(self, root, link):
+        with self.assertRaises(compile.RootError) as caught:
+            compile.discover_timeline_files(root)
+        self.assertIn(link, str(caught.exception))
+
+    def test_person_folder_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"IR-009-x.md": "# outside\n"})
+        root = support.make_worktree(self, {"field-notes/bob/SU-x.md": "# ok\n"})
+        (root / "field-notes" / "alice").symlink_to(outside)
+        self.assert_refused(root, "field-notes/alice")
+
+    def test_incoming_field_notes_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"bob/IR-009-x.md": "# outside\n"})
+        root = support.make_worktree(self, {"incoming/bob/findings/F-001-x.md": "x\n"})
+        (root / "incoming" / "bob" / "field-notes").symlink_to(outside)
+        self.assert_refused(root, "incoming/bob/field-notes")
+
+    def test_one_file_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"IR-009-x.md": "# outside\n"})
+        root = support.make_worktree(self, {"field-notes/alice/SU-x.md": "# ok\n"})
+        (root / "field-notes" / "alice" / "IR-009-x.md").symlink_to(outside / "IR-009-x.md")
+        self.assert_refused(root, "field-notes/alice/IR-009-x.md")
+
+    def test_link_inside_the_root_is_allowed(self):
+        root = support.make_worktree(self, {"shared/SU-x.md": "# ok\n"})
+        (root / "field-notes").mkdir()
+        (root / "field-notes" / "alice").symlink_to(root / "shared")
+        self.assertEqual(self.names(root), ["field-notes/alice/SU-x.md"])
+
+
+class ParseTimelineEntryTests(unittest.TestCase):
+    def test_incident_report(self):
+        text = filled_template("incident-report.md", {
+            "[[IR_ID]]": "IR-001", "[[DATE_REPORTED]] [[TIME_REPORTED]]": "2026-11-07 09:05"})
+        entry = compile.parse_timeline_entry("field-notes/alice/IR-001-lockout.md", text)
+        self.assertEqual(entry, {
+            "type": "Incident", "time": "2026-11-07 09:05", "time_ok": True,
+            "summary": "Incident Report IR-001", "reference": "IR-001-lockout",
+            "diagnostics": [],
+        })
+
+    def test_status_update(self):
+        text = filled_template("status-update.md", {"[[DATE]] [[TIME]]": "2026-11-07 10:00"})
+        entry = compile.parse_timeline_entry("incoming/bob/field-notes/bob/SU-midpoint.md", text)
+        self.assertEqual((entry["type"], entry["time"], entry["time_ok"], entry["summary"],
+                          entry["reference"], entry["diagnostics"]),
+                         ("Status update", "2026-11-07 10:00", True, "Client Status Update",
+                          "SU-midpoint", []))
+
+    def test_inject_response(self):
+        text = filled_template("inject-response.md", {
+            "[[INJECT_TITLE]]": "Scope question", "[[DATE_SENT]] [[TIME_SENT]]": "2026-11-07 11:30"})
+        entry = compile.parse_timeline_entry("field-notes/alice/INJ-scope.md", text)
+        self.assertEqual((entry["type"], entry["time"], entry["time_ok"], entry["summary"],
+                          entry["reference"], entry["diagnostics"]),
+                         ("Inject", "2026-11-07 11:30", True, "Inject Response: Scope question",
+                          "INJ-scope", []))
+
+    def test_summary_keeps_an_unfilled_marker_as_written(self):
+        text = filled_template("incident-report.md", {
+            "[[DATE_REPORTED]] [[TIME_REPORTED]]": "2026-11-07 09:05"})
+        entry = compile.parse_timeline_entry("IR-001-x.md", text)
+        self.assertEqual(entry["summary"], "Incident Report [[IR_ID]]")
+
+    def test_time_without_date_warns(self):
+        text = filled_template("status-update.md", {"[[DATE]] [[TIME]]": "09:05"})
+        entry = compile.parse_timeline_entry("SU-x.md", text)
+        self.assertFalse(entry["time_ok"])
+        self.assertEqual(entry["diagnostics"], [
+            ("SU-x.md", 5, "Time is not YYYY-MM-DD HH:MM: 09:05; sorted last")])
+
+    def test_malformed_time_warns(self):
+        text = filled_template("inject-response.md", {"[[DATE_SENT]] [[TIME_SENT]]": "around nine"})
+        entry = compile.parse_timeline_entry("INJ-x.md", text)
+        self.assertFalse(entry["time_ok"])
+        self.assertEqual(entry["diagnostics"], [
+            ("INJ-x.md", 7, "Sent is not YYYY-MM-DD HH:MM: around nine; sorted last")])
+
+    def test_unfilled_marker_time_warns(self):
+        entry = compile.parse_timeline_entry("IR-001-x.md", filled_template("incident-report.md", {}))
+        self.assertFalse(entry["time_ok"])
+        self.assertEqual(entry["diagnostics"], [
+            ("IR-001-x.md", 8, "Time reported is not YYYY-MM-DD HH:MM: "
+                               "[[DATE_REPORTED]] [[TIME_REPORTED]]; sorted last")])
+
+    def test_incident_uses_time_reported_not_time_detected(self):
+        text = filled_template("incident-report.md", {
+            "[[DATE_DETECTED]] [[TIME_DETECTED]]": "2026-11-07 08:50"})
+        self.assertFalse(compile.parse_timeline_entry("IR-001-x.md", text)["time_ok"])
+
+    def test_missing_time_line_warns(self):
+        entry = compile.parse_timeline_entry("SU-x.md", "# Client Status Update\n")
+        self.assertEqual((entry["time"], entry["time_ok"]), ("", False))
+        self.assertEqual(entry["diagnostics"], [
+            ("SU-x.md", "Time", "missing labelled line '- **Time:**'; sorted last")])
+
+    def test_missing_heading_warns(self):
+        entry = compile.parse_timeline_entry("SU-x.md", "## Not a top heading\n- **Time:** 2026-11-07 10:00\n")
+        self.assertEqual(entry["summary"], "")
+        self.assertEqual(entry["diagnostics"], [("SU-x.md", 1, "no '# ' heading; Summary left blank")])
+
+    def test_windows_line_endings(self):
+        text = "# Client Status Update\r\n- **Time:** 2026-11-07 10:00\r\n"
+        entry = compile.parse_timeline_entry("SU-x.md", text)
+        self.assertEqual((entry["summary"], entry["time"], entry["time_ok"]),
+                         ("Client Status Update", "2026-11-07 10:00", True))
+
+
+TIMELINE_GOLDEN = """\
+| Time | Type | Summary | Reference |
+| --- | --- | --- | --- |
+| 2026-11-07 09:05 | Incident | Incident Report IR-001 | IR-001-lockout |
+| 2026-11-07 10:00 | Incident | Incident Report IR-002 | IR-002-crash |
+| 2026-11-07 10:00 | Status update | Client Status Update | SU-midpoint |
+| [[DATE_SENT]] [[TIME_SENT]] | Inject | Inject Response: Scope | INJ-scope |
+| 09:05 | Status update | Client Status Update | SU-early |
+"""
+
+
+class RenderTimelineTests(unittest.TestCase):
+    def entry(self, file_name, heading, label, time):
+        text = "# " + heading + "\n\n- **" + label + ":** " + time + "\n"
+        return compile.parse_timeline_entry(file_name, text)
+
+    def test_golden_timeline(self):
+        # Given out of order. The two 10:00 entries tie on time, so they go
+        # by reference; the two invalid times go last, by reference.
+        entries = [
+            self.entry("SU-midpoint.md", "Client Status Update", "Time", "2026-11-07 10:00"),
+            self.entry("SU-early.md", "Client Status Update", "Time", "09:05"),
+            self.entry("INJ-scope.md", "Inject Response: Scope", "Sent", "[[DATE_SENT]] [[TIME_SENT]]"),
+            self.entry("IR-002-crash.md", "Incident Report IR-002", "Time reported", "2026-11-07 10:00"),
+            self.entry("IR-001-lockout.md", "Incident Report IR-001", "Time reported", "2026-11-07 09:05"),
+        ]
+        text = compile.render_timeline(entries)
+        self.assertEqual(text, TIMELINE_GOLDEN)
+        # Header, separator, then one row per entry.
+        self.assertEqual(len(text.splitlines()), 2 + len(entries))
+
+    def test_no_entries_gives_header_only(self):
+        self.assertEqual(compile.render_timeline([]),
+                         "| Time | Type | Summary | Reference |\n| --- | --- | --- | --- |\n")
+
+    def test_pipe_in_summary_warns_without_changing_text(self):
+        entry = self.entry("SU-x.md", "Status | midpoint", "Time", "2026-11-07 10:00")
+        self.assertEqual(entry["summary"], "Status | midpoint")
+        self.assertEqual(entry["diagnostics"],
+                         [("SU-x.md", 1, "SU-x: '|' in Summary breaks the timeline table")])
+        self.assertIn("| Status | midpoint |", compile.render_timeline([entry]))
+
+    def test_escaped_pipe_in_summary_does_not_warn(self):
+        entry = self.entry("SU-x.md", "Status \\| midpoint", "Time", "2026-11-07 10:00")
+        self.assertEqual(entry["summary"], "Status \\| midpoint")
+        self.assertEqual(entry["diagnostics"], [])
+
+    def test_unescaped_pipe_next_to_an_escaped_one_still_warns(self):
+        entry = self.entry("SU-x.md", "Status \\| mid | point", "Time", "2026-11-07 10:00")
+        self.assertEqual(entry["diagnostics"],
+                         [("SU-x.md", 1, "SU-x: '|' in Summary breaks the timeline table")])
+
+
+def combined_entry(name, text):
+    """Parse one finding into a render_combined_findings() entry."""
+    heading = compile.parse_finding_heading(name, text)
+    fields = compile.parse_labelled_fields(name, text)["fields"]
+    severity = compile.severity_value(name, fields)[0]
+    hits = compile.scan_leftover_markers(name, text)
+    status, summary = compile.finding_readiness(
+        hits, compile.missing_required_fields(fields), severity, heading["title"])
+    return {"id": heading["id"], "severity": severity, "status": status,
+            "summary": summary, "text": text}
+
+
+class RenderCombinedFindingsTests(unittest.TestCase):
+    def setUp(self):
+        complete = support.make_complete_finding
+        self.high = complete("F-002", "Weak service password").replace(
+            "- **Severity:** Critical", "- **Severity:** High")
+        # One leftover marker makes F-001 a draft.
+        self.low_draft = complete("F-001", "Verbose error page").replace(
+            "- **Severity:** Critical", "- **Severity:** Low").replace(
+            "admin\n", "[[ACCOUNT]]\n", 1)
+
+    def combined(self):
+        return compile.render_combined_findings([
+            combined_entry("findings/F-001-x.md", self.low_draft),
+            combined_entry("findings/F-002-x.md", self.high),
+        ])
+
+    def test_golden_order_and_banner(self):
+        self.assertEqual(self.combined(), self.high + "\n"
+                         + "[[NOTE: DRAFT: 1 unresolved markers, 0 missing fields]]\n"
+                         + self.low_draft)
+
+    def test_headings_are_byte_identical(self):
+        def headings(text):
+            return [line for line in text.split("\n") if line.startswith("#")]
+        self.assertEqual(headings(self.combined()), headings(self.high) + headings(self.low_draft))
+
+    def test_only_the_draft_has_one_banner(self):
+        text = self.combined()
+        self.assertEqual(text.count("[[NOTE: DRAFT:"), 1)
+        self.assertIn("[[NOTE: DRAFT: 1 unresolved markers, 0 missing fields]]\n"
+                      "### F-001: Verbose error page\n", text)
+
+    def test_missing_severity_goes_last(self):
+        no_severity = self.high.replace("### F-002", "### F-000").replace(
+            "- **Severity:** High", "- **Severity:** high")
+        text = compile.render_combined_findings([
+            combined_entry("findings/F-000-x.md", no_severity),
+            combined_entry("findings/F-001-x.md", self.low_draft),
+        ])
+        self.assertLess(text.index("### F-001"), text.index("### F-000"))
+        # Its banner says why: only the severity word holds it back.
+        self.assertIn("[[NOTE: DRAFT: 0 unresolved markers, 0 missing fields, "
+                      "no severity word]]\n### F-000", text)
+
+    def test_text_is_kept_exactly_and_a_missing_last_line_break_is_added(self):
+        windows = self.high.replace("\n", "\r\n")
+        no_break = self.low_draft.rstrip("\n")
+        text = compile.render_combined_findings([
+            combined_entry("findings/F-002-x.md", windows),
+            combined_entry("findings/F-001-x.md", no_break),
+        ])
+        self.assertEqual(text, windows + "\n"
+                         + "[[NOTE: DRAFT: 1 unresolved markers, 0 missing fields]]\n"
+                         + no_break + "\n")
+
+    def test_no_findings_gives_empty_text(self):
+        self.assertEqual(compile.render_combined_findings([]), "")
 
 
 if __name__ == "__main__":
