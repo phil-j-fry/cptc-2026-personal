@@ -298,6 +298,13 @@ class ParseFindingHeadingTests(unittest.TestCase):
             ("findings/F-001-x.md", 1, "no finding title heading like '### F-NNN: Title'"),
         ])
 
+    def test_blank_title_is_reported(self):
+        result = compile.parse_finding_heading("findings/F-001-x.md", "### F-001:  \n")
+        self.assertEqual(result["title"], "")
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", 1, "heading has no title text"),
+        ])
+
     def test_marker_heading_without_filename_id(self):
         # A library entry such as L03-*.md has no F-NNN in its name.
         text = "### [[FINDING_ID]]: SMB signing not required\n"
@@ -343,6 +350,17 @@ class ParseLabelledFieldsTests(unittest.TestCase):
         self.assertNotIn("Status", result["fields"])
         self.assertEqual(result["diagnostics"], [
             ("findings/F-001-x.md", "Status", "missing labelled line '- **Status:**'"),
+        ])
+
+    def test_duplicate_label_is_reported_and_first_line_wins(self):
+        text = support.make_complete_finding().replace(
+            "- **Severity:** Critical\n",
+            "- **Severity:** Critical\n- **Severity:** Low\n- **Severity:** High\n")
+        result = compile.parse_labelled_fields("findings/F-001-x.md", text)
+        self.assertEqual(result["fields"]["Severity"], {"value": "Critical", "line": 3})
+        self.assertEqual(result["diagnostics"], [
+            ("findings/F-001-x.md", 4, "duplicate Severity line; line 3 is used"),
+            ("findings/F-001-x.md", 5, "duplicate Severity line; line 3 is used"),
         ])
 
     def test_extra_whitespace_is_tolerated(self):

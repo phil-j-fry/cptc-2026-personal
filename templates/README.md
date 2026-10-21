@@ -53,19 +53,19 @@ Use these names rather than inventing new ones for the same thing.
 | Template | Use it for | Who fills it | When |
 |---|---|---|---|
 | `finding.md` | One file per finding, copied to `findings/F-XXX-short-name.md` | The finder (R18) | The moment a finding is confirmed |
-| `severity-guide.md` | Reference, not a deliverable | Whoever makes severity calls (owner TBD; open question "Roles, and who owns which team jobs?") | When assigning or reviewing severity |
-| `report.md` | The final report. Copied once to `~/cptc-work/report.md` (not into `findings/`) | The report writer | Copied at the midpoint, about 5pm; see `WORKFLOWS.md` |
-| `incident-report.md` | Anything we caused or might have caused | owner TBD; open question "Roles, and who owns which team jobs?" | Timing TBD (open question "What do the rules require for incident reports, and how fast?") |
-| `status-update.md` | Scheduled or ad-hoc progress messages to the client | owner TBD; open question "Roles, and who owns which team jobs?" | Midpoint, and whenever a critical is found |
-| `inject-response.md` | A client request during the event | owner TBD; open question "Roles, and who owns which team jobs?" | Before the inject's due time |
+| `severity-guide.md` | Reference, not a deliverable | Everyone, when assigning severity; ratings are made consistent in one review pass (R8) | When assigning or reviewing severity |
+| `report.md` | The final report. Copied once to `~/cptc-work/report.md` (not into `findings/`) | The report writer | Copied at the midpoint, about 2 PM; see `WORKFLOWS.md` |
+| `incident-report.md` | Anything we caused or might have caused | Whole team (R10) | Timing TBD (open question "What do the rules require for incident reports, and how fast?") |
+| `status-update.md` | Scheduled or ad-hoc progress messages to the client | Whole team (R13) | Midpoint, and whenever a critical is found |
+| `inject-response.md` | A client request during the event | Whole team | Before the inject's due time |
 | `presentation-outline.md` | Planning the debrief slides | Whole team | After the report is submitted |
-| `tracker/` | Hosts, credentials, created accounts and artifacts, attack path, and findings index (CSV) | Everyone (own rows); findings index owner TBD; open question "Roles, and who owns which team jobs?" | Copied to `~/cptc-work/tracker/` at kickoff. Sharing method TBD (blocked by the open question "Is shared storage or a shared document provided?"); see `tracker/README.md` |
+| `tracker/` | Hosts, credentials, created accounts and artifacts, attack path, and findings index (CSV) | Everyone (own rows); `compile.py` checks the findings index (R17) | Copied to `~/cptc-work/tracker/` at kickoff. Sharing method TBD (blocked by the open question "Is shared storage or a shared document provided?"); see `tracker/README.md` |
 
 ## The workflow from finding to report
 
 1. Confirm the finding and take an ID straight away (how IDs are allocated is **TBD**, R6; blocked by the open question "Is shared storage or a shared document provided?").
 2. Copy `templates/finding.md` (or a matching `findings-library/` entry) to `findings/F-XXX-short-name.md`.
 3. Fill every `[[FIELD]]`, resolve every `[[CHOOSE]]`, and delete every `[[NOTE]]` as you go.
-4. Hand it to the report writer. You keep editing your own file until it's pasted into `report.md`; after that, changes are made in `report.md` (R18). A finding without complete reproduction steps is sent back (R7); who makes the final severity call is TBD (R8; open question "Roles, and who owns which team jobs?").
+4. Hand it to the report writer. You keep editing your own file until it's pasted into `report.md`; after that, changes are made in `report.md` (R18). A finding without complete reproduction steps is sent back (R7); severity is made consistent in one review pass (R8).
 5. At the midpoint the report writer copies `templates/report.md` to `~/cptc-work/report.md` and pastes the finished findings into it, ordered by severity (`WORKFLOWS.md`).
 6. Before every submission, run `checklists/50-report-qa.md`.

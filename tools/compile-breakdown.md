@@ -83,10 +83,10 @@ Lists the finding files to compile: `findings/F-*.md` and `incoming/*/findings/F
 
 **Why sort:** the disk lists files in no fixed order. Sorting gives the same order every run, with `findings/` before `incoming/`.
 
-### `HEADING_RE` + `FILENAME_ID_RE` + `find_title_heading()` + `parse_finding_heading()` - lines 197-267
+### `HEADING_RE` + `FILENAME_ID_RE` + `find_title_heading()` + `parse_finding_heading()` - lines 197-271
 Reads the ID and title from the `### F-NNN: Title` line, and reports heading problems.
 
-**If Operations asks:** "It finds the title line of a finding. If the ID is still the `[[FINDING_ID]]` placeholder, it uses the ID from the filename instead. It flags three problems: the heading and filename IDs differ, the title isn't a `###` heading, or there's no title line at all."
+**If Operations asks:** "It finds the title line of a finding. If the ID is still the `[[FINDING_ID]]` placeholder, it uses the ID from the filename instead. It flags five problems: the heading and filename IDs differ, the title isn't a `###` heading, the title text after the colon is blank, there's no ID in the heading or the filename, or there's no title line at all."
 
 | Heading | ID used | Problem reported |
 |---|---|---|
@@ -94,6 +94,8 @@ Reads the ID and title from the `### F-NNN: Title` line, and reports heading pro
 | `### [[FINDING_ID]]: Title` in `F-007-x.md` | F-007 (from the filename) | none here; the marker is counted as a leftover |
 | `### F-002: Title` in `F-001-x.md` | F-002 (the heading wins: it's what goes in the report) | ID mismatch |
 | `## F-001: Title` | F-001 | not a `###` heading |
+| `### F-001:` with nothing after the colon | F-001 | no title text |
+| `### [[FINDING_ID]]: Title` in a file without F-NNN | none | no finding ID |
 | no title line | the filename's ID | no title heading |
 
 **Why `###`:** finding files use `###` for the title and `####` for sections, so they fit under the report's `## 5. Detailed Findings` without changes.
@@ -102,18 +104,20 @@ Reads the ID and title from the `### F-NNN: Title` line, and reports heading pro
 
 **Limit:** the first matching line wins, even inside a fenced code block. A template-shaped finding starts with its title, so this doesn't come up in practice.
 
-### `FIELD_LABELS` + `LABEL_LINE_RE` + CVSS regexes + `parse_labelled_fields()` - lines 270-327
+### `FIELD_LABELS` + `LABEL_LINE_RE` + CVSS regexes + `parse_labelled_fields()` - lines 274-342
 Reads the six required detail lines (`- **Severity:** …` and so on) and splits the CVSS line into vector and score.
 
-**If Operations asks:** "Each detail in a finding is a line like `- **Severity:** High`. This finds the six we need by their label: Severity, CVSS 3.1, Why this severity, Affected assets, Status and References. Values are kept as written, placeholders included; only spaces at the ends are dropped. A missing line is reported with the file and field name; it never crashes the run."
+**If Operations asks:** "Each detail in a finding is a line like `- **Severity:** High`. This finds the six we need by their label: Severity, CVSS 3.1, Why this severity, Affected assets, Status and References. Values are kept as written, placeholders included; only spaces at the ends are dropped. A missing line is reported with the file and field name; it never crashes the run. If a label appears on more than one line, the first one is used and each extra one is reported at its own line."
 
 **Why `rstrip()` each line:** a file saved on Windows ends every line with `\r\n`. Splitting on `\n` leaves the `\r`, which would otherwise end up inside every value (and later inside the summary table).
 
 **CVSS line:** the vector is the text between backticks, the score is the text in parentheses outside them. `` `CVSS:3.1/AV:N/...` (9.8) `` gives the vector `CVSS:3.1/AV:N/...` and the score `9.8`.
 
+**Why two shapes of problem:** a missing label has no line to point at, so it is `(file, label, message)`. A duplicate does have one, so it is `(file, line, message)`, like the heading problems, e.g. `duplicate Severity line; line 3 is used`.
+
 **Limit:** the colon must be inside the bold, as in the template (`- **Severity:**`). A hand-typed `**Severity**:` is reported as missing.
 
-### `SEVERITIES` + `SEVERITY_RE` + `severity_value()` - lines 330-357
+### `SEVERITIES` + `SEVERITY_RE` + `severity_value()` - lines 345-372
 Takes the first exact level word from the Severity line, after removing markers.
 
 **If Operations asks:** "It reads the severity word: Critical, High, Medium, Low or Informational, spelled exactly like that. Placeholders are removed first, because the unfilled `[[CHOOSE: Critical / High / …]]` lists every word and would otherwise read as Critical. No level word means a warning, and the finding sorts last."
@@ -122,12 +126,12 @@ Takes the first exact level word from the Severity line, after removing markers.
 
 **Why no second warning for a missing Severity line:** `parse_labelled_fields()` already reports it.
 
-### `finding_sort_key()` - lines 360-371
+### `finding_sort_key()` - lines 375-386
 Sort order: Critical → Informational, then no severity, then by ID.
 
 **If Operations asks:** "Findings are listed most severe first, and by ID within each level. Anything without a severity goes at the end so it stands out."
 
-### `DEFAULT_INDEX` + `load_index_ids()` - lines 374-429
+### `DEFAULT_INDEX` + `load_index_ids()` - lines 389-444
 Reads the `finding_id` column of the findings index, to compare later with the finding files.
 
 **If Operations asks:** "It reads the team's master list of finding IDs. If the list is missing or empty, the tool warns and skips the comparison instead of flagging every finding. If the file is broken, that's reported as a QA problem instead of crashing: a warning while drafting, an error with `--final`."
@@ -248,29 +252,31 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove the tool picks up exactly our findings and our teammates', ignores everything else, and refuses any link that leads outside the working copy."
 
-#### `ParseFindingHeadingTests` - lines 249-319
+#### `ParseFindingHeadingTests` - lines 249-326
 - a filled `### F-001: …` heading gives the exact ID, title and line
 - `[[FINDING_ID]]` uses the filename's ID and counts the marker; the untouched template gives 2 markers
 - F-001 filename with an F-002 heading is flagged
 - `##` instead of `###` is flagged, with its line
 - no heading, or no ID anywhere, is reported without crashing
+- `### F-001:` with nothing after the colon is flagged
 - a Windows `\r\n` line ending isn't kept in the title
 - `F-0012` isn't read as `F-001`
 
 **If Operations asks:** "Each heading problem the spec names has a test that checks the exact message."
 
-#### `ParseLabelledFieldsTests` - lines 322-383
+#### `ParseLabelledFieldsTests` - lines 329-401
 - the complete sample finding returns all six labels, plus the vector and score
 - removing the Status line gives exactly one problem, naming Status
+- two extra Severity lines give one problem each, at their own line, and the first line's value is kept
 - extra spaces and tabs are allowed
 - Windows `\r\n` line endings leave no `\r` in the values
 - the untouched template keeps its placeholders as written
 - a bare `9.8`, or brackets inside the vector, don't give a wrong vector or score
 - an empty file reports all six labels
 
-**If Operations asks:** "These prove the tool reads every detail line from a real-shaped finding, and reports a missing one instead of crashing."
+**If Operations asks:** "These prove the tool reads every detail line from a real-shaped finding, and reports a missing or repeated one instead of crashing."
 
-#### `severity_of()` + `SeverityValueTests` - lines 386-419
+#### `severity_of()` + `SeverityValueTests` - lines 404-437
 `severity_of()` parses one line the way the tool does: label first, then level.
 - `High` is read
 - unfilled `[[CHOOSE: …]]` and lowercase `high` give no severity, with a warning
@@ -279,13 +285,13 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove an unfilled or misspelled severity is never mistaken for a real one."
 
-#### `FindingSortKeyTests` - lines 422-447
+#### `FindingSortKeyTests` - lines 440-465
 - eight findings sort Critical, High, High, Medium, Low, Informational, then the two with no severity, with ties by ID
 - a finding with no ID still sorts
 
 **If Operations asks:** "This checks the exact order the report tables will use."
 
-#### `INDEX_HEADER` + `LoadIndexIdsTests` - lines 450-523
+#### `INDEX_HEADER` + `LoadIndexIdsTests` - lines 468-541
 `INDEX_HEADER` is the header row of `templates/tracker/findings-index.csv`.
 - the default index loads an F-001 row
 - an explicit `--index` inside the root wins over the default; one outside is refused
@@ -295,7 +301,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These cover every state the index file can be in, and check that a broken one only blocks the run in `--final`."
 
-#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 526-527
+#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 544-545
 Let one test file run on its own: `python3 tools/tests/test_compile.py`.
 
 **If Operations asks:** "So one test file can be run by itself. Normally we run them all with `python3 -m unittest discover tools/tests`."

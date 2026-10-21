@@ -23,5 +23,11 @@ The backlog for `compile.py`, `tools/notebook.py` and `scripts/`, and nothing el
     - Separate from `pull.sh` (item 1): that's the report writer collecting teammates' files all day; this runs once per person at kickoff.
     - When it exists: the team README, `checklists/00` and WORKFLOWS step 1 say "run it"; its how-to goes in `tools/README.md`, including a list of every file and folder it creates (e.g. `~/cptc-work/`, `field-notes/<name>/`, `incoming/`, and for Medium `tracker/`, `ot-hosts.txt` and the saved name), so the team can check it and explain it (R4).
 14. Finish `tools/README.md` as each tool is built and reviewed (Oct 19: first version written at the split cleanup). Fill the three headed stubs under "Still to write (build workflow)", which `tools/BUILD-SPEC.md` (Deliverables) requires: how each tool works, section by section; a manual test checklist; "Questions Operations might ask". Also switch the `compile.py` section from "in progress" / "will" to what it actually does once it runs, and the `notebook.py` section once it's built.
+15. At C-15 (readiness): check whether anything uses `heading_markers` from `parse_finding_heading()` (`compile.py:248`). The whole-file leftover scan already counts the heading's markers, so if C-15 doesn't use it, remove it and its test assertions (Chunk 2 review, Oct 20).
+16. At C-15 (readiness): READY also requires `severity_value()` to find a level word. Today a Severity line with text but no level (`high`, `Hgh`) counts as filled, so the finding can be READY with a blank Severity cell. Make it DRAFT instead. This departs from the spec's "has text" rule, so it needs a DECISIONS entry (Chunk 2 review, Oct 20; user chose this over case-insensitive matching).
+
+## Deferred
+
+17. After M3, if time: keep the notebook's Severity dropdown editable after it's filled. Today a box exists only while its `[[…]]` marker does, so a later change means retyping the word in the raw text box, which is hard for newer testers. Reuse `compile.py`'s `parse_labelled_fields()` and `SEVERITIES` (allowed by OQ-13). About 25–40 lines in the fill-in view, and a spec change (breaks "the template is the form"), so it needs a DECISIONS entry (Chunk 2 review, Oct 20).
 
 Not in this file: a worked attack-path example with fake data. That's a team task (Drive TODO), and it goes to the team repo once written.

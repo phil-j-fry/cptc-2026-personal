@@ -227,8 +227,8 @@ def parse_finding_heading(file_name, text):
       heading_markers   leftover markers on the heading line, e.g. 1 for an
                         unfilled [[FINDING_ID]]
       diagnostics       (file_name, line_number, message) problems
-    Heading problems (ID mismatch, wrong heading level, no heading) are
-    reported only here, so no other check repeats them.
+    Heading problems (ID mismatch, wrong heading level, no heading, no
+    title) are reported only here, so no other check repeats them.
     """
     match = FILENAME_ID_RE.match(Path(file_name).name)
     filename_id = match.group(0) if match else None
@@ -251,6 +251,10 @@ def parse_finding_heading(file_name, text):
     if hashes != "###":
         result["diagnostics"].append(
             (file_name, line_number, "title is a " + hashes + " heading, not ###"))
+    # A blank title has no marker, so the leftover check can't see it; this
+    # warning is what reports it.
+    if not title:
+        result["diagnostics"].append((file_name, line_number, "heading has no title text"))
     if heading_id.startswith("F-"):
         # The heading is what goes into the report, so its ID wins; a
         # different filename ID is flagged so one of them gets fixed.
@@ -291,20 +295,30 @@ def parse_labelled_fields(file_name, text):
                     in FIELD_LABELS that was found
       cvss_vector   the text between backticks on the CVSS 3.1 line, or None
       cvss_score    the text in parentheses on the CVSS 3.1 line, or None
-      diagnostics   (file_name, label, message) for each missing label
+      diagnostics   (file_name, label, message) for each missing label;
+                    (file_name, line_number, message) for each duplicate
     A missing label is reported, never raised, so one bad file can't stop
     the whole compile.
     """
     fields = {}
+    duplicates = []
     # Split on "\n" only, so line numbers match grep -n (see above).
     for line_number, line in enumerate(text.split("\n"), start=1):
         # rstrip() also drops the "\r" a Windows line ending leaves behind,
         # which would otherwise end up inside every value.
         match = LABEL_LINE_RE.match(line.rstrip())
-        # The first line with a label wins; other labels (Likelihood,
-        # Immediate...) aren't needed by compile and are ignored.
-        if match and match.group(1) in FIELD_LABELS and match.group(1) not in fields:
-            fields[match.group(1)] = {"value": match.group(2), "line": line_number}
+        # Other labels (Likelihood, Immediate...) aren't needed by compile
+        # and are ignored.
+        if match and match.group(1) in FIELD_LABELS:
+            label = match.group(1)
+            if label not in fields:
+                fields[label] = {"value": match.group(2), "line": line_number}
+            else:
+                # The first line wins; flag each extra one so a wrong value
+                # can't slip into the report. Unlike a missing label it has a
+                # real line, so it is (file_name, line_number, message).
+                duplicates.append((file_name, line_number, "duplicate " + label
+                                   + " line; line " + str(fields[label]["line"]) + " is used"))
 
     result = {"fields": fields, "cvss_vector": None, "cvss_score": None,
               "diagnostics": []}
@@ -312,6 +326,7 @@ def parse_labelled_fields(file_name, text):
         if label not in fields:
             result["diagnostics"].append(
                 (file_name, label, "missing labelled line '- **" + label + ":**'"))
+    result["diagnostics"].extend(duplicates)
 
     if "CVSS 3.1" in fields:
         cvss = fields["CVSS 3.1"]["value"]

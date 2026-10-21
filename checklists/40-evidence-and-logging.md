@@ -29,4 +29,4 @@ The report is only as good as the evidence. Novices: **this sheet is your main j
 
 ## If something breaks
 - [ ] Stop. Note the time. Tell the team.
-- [ ] File `templates/incident-report.md` and notify Operations (owner TBD; open question "Roles, and who owns which team jobs?"; timing TBD, open question "What do the rules require for incident reports, and how fast?")
+- [ ] File `templates/incident-report.md` and notify Operations (timing TBD, open question "What do the rules require for incident reports, and how fast?")
