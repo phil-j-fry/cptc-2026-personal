@@ -2082,5 +2082,293 @@ class ModuleSafetyTests(unittest.TestCase):
                 self.assertNotIn(name, names)
 
 
+class CompleteRunTests(unittest.TestCase):
+    """CTX-01: a fully filled-in working copy passes every --final check."""
+
+    def setUp(self):
+        # The event's shape: the report writer's own finding, a teammate's
+        # finding in incoming/, an index listing both, one status update,
+        # and a report.md with a finished finding pasted in.
+        self.report = ("# Penetration Test Report\n\n## 5. Detailed Findings\n\n"
+                       + support.make_complete_finding())
+        self.root = support.make_worktree(self, {
+            "findings/F-001-default-admin-password.md": support.make_complete_finding(),
+            "incoming/bob/findings/F-002-weak-service-password.md":
+                support.make_complete_finding("F-002", "Weak service password"),
+            "tracker/findings-index.csv": INDEX_HEADER + "F-001,,,,,,\nF-002,,,,,,\n",
+            "field-notes/alice/SU-midpoint.md":
+                "# Client Status Update\n\n- **Time:** 2026-11-07 12:00\n",
+            "report.md": self.report,
+        })
+
+    def run_final(self):
+        """Run compile.run() in --final with no pandoc hint."""
+        with mock.patch("shutil.which", return_value=None):
+            return compile.run(self.root, None, True)
+
+    def test_final_run_has_no_problems_and_returns_0(self):
+        exit_code, qa_text, lines = self.run_final()
+        self.assertEqual(exit_code, 0)
+        # Four WROTE lines, then no WARNING or ERROR line at all.
+        self.assertEqual(lines[4:], [
+            "report.md checked: 0 problems",
+            "QA: 2 findings; 2 READY; 0 DRAFT; 0 warnings; 0 errors",
+        ])
+
+    def test_every_qa_check_is_pass(self):
+        qa_text = self.run_final()[1]
+        # Every named check must print its result line, so a check missing
+        # from the report fails this test. (It shows each line is there,
+        # not that the check behind it ran.)
+        check_lines = [line for line in qa_text.splitlines()
+                       if line.startswith("PASS ") or line.startswith("FAIL ")]
+        self.assertEqual(check_lines, ["PASS " + name for name in compile.QA_CHECKS]
+                         + ["PASS leftover markers", "PASS older-style leftovers"])
+        # The checks the complete finding exists to pass: its rationale, its
+        # indented Expected: lines and its https:// reference.
+        for name in ("required fields", "reproduction steps", "references"):
+            with self.subTest(name=name):
+                self.assertIn(name, compile.QA_CHECKS)
+        self.assertIn("  findings/F-001-default-admin-password.md: READY", qa_text)
+        self.assertIn("  incoming/bob/findings/F-002-weak-service-password.md: READY", qa_text)
+
+    def test_all_four_outputs_are_written(self):
+        exit_code, qa_text, lines = self.run_final()
+        build = self.root.resolve() / "build"
+        self.assertEqual(lines[:4], ["WROTE " + str(build / name)
+                                     for name in compile.OUTPUT_FILES])
+        self.assertEqual((build / "qa-report.txt").read_text(encoding="utf-8"), qa_text)
+        summary = (build / "findings-summary.md").read_text(encoding="utf-8")
+        self.assertIn("| F-001 | Default admin password on web01 | Critical | "
+                      "web01 (10.0.0.1), http://10.0.0.1/login, admin | Exploited |", summary)
+        self.assertIn("| F-002 | Weak service password | Critical | ", summary)
+        self.assertIn("| 2 | 0 | 0 | 0 | 0 | 2 |", summary)
+        timeline = (build / "interactions-timeline.md").read_text(encoding="utf-8")
+        self.assertIn("| 2026-11-07 12:00 | Status update | Client Status Update | SU-midpoint |",
+                      timeline)
+        # Both findings unchanged, in ID order, with no DRAFT banner.
+        combined = (build / "findings-combined.md").read_text(encoding="utf-8")
+        self.assertEqual(combined, support.make_complete_finding() + "\n"
+                         + support.make_complete_finding("F-002", "Weak service password"))
+        # report.md is only read, never written.
+        self.assertEqual((self.root / "report.md").read_text(encoding="utf-8"), self.report)
+
+
+class DoneMatrixTests(unittest.TestCase):
+    """CTX-02: the Definition-of-done draft/final matrix in one table."""
+
+    COMPLETE = support.make_complete_finding()
+    # One leftover marker and nothing else wrong: Affected assets still has
+    # text, so no required field goes missing.
+    MARKED = COMPLETE.replace("web01 (10.0.0.1), http", "[[HOST]] (10.0.0.1), http")
+    REPORT_WITH_MARKER = "# Penetration Test Report\n\n[[EXEC_SUMMARY]]\n"
+
+    # (case, finding text, report.md text or None for absent, draft exit,
+    #  --final exit, the finding's readiness, the --final ERROR lines)
+    MATRIX = [
+        ("marker in a finding", MARKED, None, 0, 1, "DRAFT",
+         ["ERROR: findings/F-001-default-admin-password.md:7: leftover marker [[HOST"]),
+        ("marker only in report.md", COMPLETE, REPORT_WITH_MARKER, 0, 1, "READY",
+         ["ERROR: report.md:3: leftover marker [[EXEC_SUMMARY"]),
+        ("report.md absent", COMPLETE, None, 0, 0, "READY", []),
+    ]
+
+    def run_quietly(self, root, final):
+        """Run compile.run() with no pandoc hint."""
+        with mock.patch("shutil.which", return_value=None):
+            return compile.run(root, None, final)
+
+    def test_draft_and_final_matrix(self):
+        for case, finding, report, draft_exit, final_exit, readiness, final_errors in self.MATRIX:
+            with self.subTest(case=case):
+                # A fresh root per row, so one row's build/ can't affect the next.
+                files = {
+                    "findings/F-001-default-admin-password.md": finding,
+                    "tracker/findings-index.csv": INDEX_HEADER + "F-001,,,,,,\n",
+                }
+                if report is not None:
+                    files["report.md"] = report
+                root = support.make_worktree(self, files)
+
+                exit_code, qa_text, lines = self.run_quietly(root, False)
+                self.assertEqual(exit_code, draft_exit)
+                self.assertIn("  findings/F-001-default-admin-password.md: " + readiness, qa_text)
+                # Draft mode ignores report.md: no line mentions it (the
+                # pandoc hint, which names it, is patched out) and no error.
+                self.assertFalse(any("report.md" in line for line in lines))
+                self.assertFalse(any(line.startswith("ERROR:") for line in lines))
+                combined = (root / "build" / "findings-combined.md").read_text(encoding="utf-8")
+                self.assertEqual("[[NOTE: DRAFT" in combined, readiness == "DRAFT")
+
+                exit_code, qa_text, lines = self.run_quietly(root, True)
+                self.assertEqual(exit_code, final_exit)
+                # The exit code alone could come from any error, so check the cause.
+                self.assertEqual([line for line in lines if line.startswith("ERROR:")],
+                                 final_errors)
+                if report is None:
+                    self.assertIn("report.md NOT FOUND: report not checked", lines)
+
+
+# Findings A and B from the 'event-scenario' canvas note (base corpus),
+# copied exactly. All names and addresses are fake.
+EVENT_F001 = """\
+### F-001: Ticket records accessible across guest accounts
+
+- **Severity:** High
+- **CVSS 3.1:** `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N` (8.1)
+- **Why this severity:** Alice read another fake guest record and changed only its display note.
+- **Affected assets:** web01 (192.0.2.20), https://tickets.example.invalid, alice
+- **Status:** Confirmed
+- **References:** CWE-639, https://example.invalid/standards/access-control
+
+#### Reproduction steps
+Starting position: signed in as alice.
+
+1. Request `GET /tickets/1001` from `https://tickets.example.invalid`.
+   Expected: the response shows the alice sample record.
+2. Change the path to `GET /tickets/1002`.
+   Expected: the response shows the bob sample record.
+"""
+
+# One real step plus pasted output that starts with an IP address. A person
+# reads one step; the output line must not count as a second one.
+EVENT_F002 = """\
+### F-002: SMB signing is not required on dc01
+
+- **Severity:** Medium
+- **CVSS 3.1:** `CVSS:3.1/AV:A/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:N` (6.1)
+- **Why this severity:** Bob confirmed relay exposure but did not relay or change a system.
+- **Affected assets:** dc01 (10.0.0.5), smb://dc01.example.invalid, bob
+- **Status:** Confirmed
+- **References:** CWE-345, https://example.invalid/standards/smb-signing
+
+#### Reproduction steps
+Starting position: in-scope internal test box with no privileged session.
+
+1. Run `nxc smb 10.0.0.5 --gen-relay-list relay.txt`.
+   Expected: dc01 is written to the relay target list.
+
+```text
+10.0.0.5 dc01 signing:false
+```
+"""
+
+
+class EventScenarioTests(unittest.TestCase):
+    """CTX-03: the event-scenario note's proven traps in one fake root.
+
+    Each trap that causes a problem (F-003, F-004) has a file of its own, so
+    each problem line points at one trap. F-002 holds two traps that should
+    cause no problem.
+      F-001  saved with a UTF-8 BOM (Windows Notepad)      Chunk 5 CR-1
+      F-002  CRLF line endings                             Chunk 2 card
+             and an IP-first output line                   Chunk 3 CR-2
+      F-003  F-001 with lowercase "high"                   C-15 Q2
+      F-004  F-001 with a second Severity line             Chunk 2 fix (a49e6b7)
+      SU     status update saved with a UTF-8 BOM          Chunk 5 CR-1
+    """
+
+    BOM = b"\xef\xbb\xbf"
+    F002_CRLF = EVENT_F002.replace("\n", "\r\n").encode("utf-8")
+
+    def setUp(self):
+        lowercase = EVENT_F001.replace(
+            "F-001: Ticket records accessible across guest accounts",
+            "F-003: Ticket export open to guest accounts").replace(
+            "- **Severity:** High", "- **Severity:** high")
+        duplicate = EVENT_F001.replace(
+            "F-001: Ticket records accessible across guest accounts",
+            "F-004: Ticket history open to guest accounts").replace(
+            "- **Severity:** High\n", "- **Severity:** High\n- **Severity:** Medium\n")
+        # Bytes, not text: the BOM and the CRLF endings are the traps, so
+        # they must reach the file exactly.
+        self.sources = {
+            "findings/F-001-ticket-record-access.md": self.BOM + EVENT_F001.encode("utf-8"),
+            "incoming/bob/findings/F-002-smb-signing.md": self.F002_CRLF,
+            "findings/F-003-ticket-export.md": lowercase.encode("utf-8"),
+            "findings/F-004-ticket-history.md": duplicate.encode("utf-8"),
+            "field-notes/alice/SU-midpoint.md":
+                self.BOM + b"# Client Status Update\n\n- **Time:** 2026-11-07 14:00\n",
+            # Lists all four, so the index check adds no problem of its own.
+            "tracker/findings-index.csv":
+                (INDEX_HEADER + "F-001,,,,,,\nF-002,,,,,,\nF-003,,,,,,\nF-004,,,,,,\n").encode("utf-8"),
+        }
+        self.root = support.make_worktree(self)
+        for relative_path, data in self.sources.items():
+            path = self.root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+
+    def run_quietly(self, final):
+        """Run compile.run() with no pandoc hint."""
+        with mock.patch("shutil.which", return_value=None):
+            return compile.run(self.root, None, final)
+
+    def problem_lines(self, lines):
+        return [line for line in lines
+                if line.startswith("WARNING:") or line.startswith("ERROR:")]
+
+    def test_draft_returns_0_with_two_warnings(self):
+        exit_code, qa_text, lines = self.run_quietly(False)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.problem_lines(lines), [
+            "WARNING: findings/F-004-ticket-history.md:4: duplicate Severity line; line 3 is used",
+            "WARNING: findings/F-003-ticket-export.md:3: no severity (Critical, High, Medium, "
+            "Low or Informational); sorted last",
+        ])
+        self.assertEqual(lines[-1], "QA: 4 findings; 3 READY; 1 DRAFT; 2 warnings; 0 errors")
+
+    def test_final_returns_1_with_the_same_two_as_errors(self):
+        exit_code, qa_text, lines = self.run_quietly(True)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(self.problem_lines(lines), [
+            "ERROR: findings/F-004-ticket-history.md:4: duplicate Severity line; line 3 is used",
+            "ERROR: findings/F-003-ticket-export.md:3: no severity (Critical, High, Medium, "
+            "Low or Informational); sorted last",
+        ])
+        self.assertEqual(lines[-1], "QA: 4 findings; 3 READY; 1 DRAFT; 0 warnings; 2 errors")
+
+    def test_readiness_of_each_trap(self):
+        for final in (False, True):
+            with self.subTest(final=final):
+                qa_text = self.run_quietly(final)[1]
+                # Lowercase "high" is not a severity word, so F-003 is the
+                # only DRAFT (C-15 Q2). F-004's duplicate label is reported
+                # on its own: READY looks only at markers, missing fields,
+                # the severity word and the title (C-15).
+                for line in (
+                        "  findings/F-001-ticket-record-access.md: READY",
+                        "  findings/F-003-ticket-export.md: DRAFT: 0 unresolved markers, "
+                        "0 missing fields, no severity word",
+                        "  findings/F-004-ticket-history.md: READY",
+                        "  incoming/bob/findings/F-002-smb-signing.md: READY"):
+                    self.assertIn(line, qa_text)
+        combined = (self.root / "build" / "findings-combined.md").read_text(encoding="utf-8")
+        self.assertEqual(combined.count("[[NOTE: DRAFT"), 1)
+
+    def test_bom_finding_and_status_update_read_as_without_bom(self):
+        self.run_quietly(False)
+        build = self.root / "build"
+        summary = (build / "findings-summary.md").read_text(encoding="utf-8")
+        self.assertIn("| F-001 | Ticket records accessible across guest accounts | High | ", summary)
+        timeline = (build / "interactions-timeline.md").read_text(encoding="utf-8")
+        self.assertIn("| 2026-11-07 14:00 | Status update | Client Status Update | SU-midpoint |",
+                      timeline)
+        self.assertNotIn(self.BOM, (build / "findings-combined.md").read_bytes())
+
+    def test_crlf_finding_with_ip_output_passes_reproduction(self):
+        qa_text = self.run_quietly(True)[1]
+        self.assertIn("\nPASS reproduction steps\n", qa_text)
+        # The CRLF finding reaches the combined file byte for byte.
+        self.assertIn(self.F002_CRLF, (self.root / "build" / "findings-combined.md").read_bytes())
+
+    def test_source_files_are_unchanged(self):
+        self.run_quietly(False)
+        self.run_quietly(True)
+        for relative_path, data in self.sources.items():
+            with self.subTest(path=relative_path):
+                self.assertEqual((self.root / relative_path).read_bytes(), data)
+
+
 if __name__ == "__main__":
     unittest.main()

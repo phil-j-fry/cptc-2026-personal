@@ -2,7 +2,7 @@
 
 Every block of `compile.py`, its test helpers, its tests, and the related edits outside `tools/`. The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code at the end of Chunk 5. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code at the end of Chunk 6. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 | Term | Meaning |
 |---|---|
@@ -20,14 +20,75 @@ Line ranges match the code at the end of Chunk 5. The implementor updates this f
 | older-style leftover | a placeholder from before the `[[...]]` markers, like `TODO`, `XX` or `YYYY`; always a warning |
 | timeline file | an `IR-` (incident report), `SU-` (status update) or `INJ-` (inject response) file in `field-notes/<name>/`; one row each in the interactions timeline |
 
+## Size and explainability (CP-01)
+
+Measured on 2026-10-21, after the CP-01 comment fixes below. No code was compressed to reach a number (user, 2026-10-20: simplicity beats line count).
+
+| Lines in `compile.py` | Count |
+|---|---|
+| code | 763 |
+| docstrings | 366 |
+| comments | 235 |
+| blank | 187 |
+| **total** | **1551** |
+
+A line with code and a comment after it counts as code (there is 1). The spec's guideline is about 200–250 lines (Constraint 6, "guidelines, not hard caps"). Code lines alone are about three times that.
+
+**Why it is bigger than the guideline:** it does more than the spec's first estimate covered:
+- 13 named QA checks, plus the two `report.md` checks in `--final`.
+- Rules the user added after the spec: the required-fields check (C-19 Q2), the full CVSS 3.1 vector (Chunk 3 CR-4), extra READY conditions (C-15 Q2/Q3), the Status and Summary pipe checks (C-16, C-17B), escaped pipes (Chunk 4 CR-4), and refusing links at `build/` (C-21).
+- A path check on every folder and file it reads, so a symlink can't lead outside the root.
+- Guards so the QA report refuses a missing or misspelt check name, and a `--final` report without the `report.md` result.
+- Readable `compile failed:` errors instead of tracebacks.
+
+**Function size:** 65 functions and 2 small exception classes. The median function is 16 lines in total, 8 of them code.
+
+| Longest functions | Total lines | Code lines | What makes it long |
+|---|---|---|---|
+| `parse_labelled_fields()` | 54 | 29 | label lines, duplicates, missing labels, then the CVSS vector and score |
+| `render_qa_report()` | 54 | 31 | three guards (missing check, unknown check, no `report.md` result), then the report text |
+| `parse_timeline_entry()` | 52 | 33 | heading, pipe check, time line and time format in one pass |
+| `load_index_ids()` | 52 | 30 | one early return per kind of unusable index |
+| `parse_finding_heading()` | 48 | 28 | five heading problems |
+| `collect_qa()` | 46 | 28 | the steps of a compile, in order |
+| `check_finding()` | 46 | 34 | the per-finding checks, in order |
+| `write_outputs()` | 43 | 31 | check every output path before writing any |
+
+**Possible splits (not done; each needs App Dev Manager's OK first; the adversary recommends none before M2, since the longest functions are 28–34 code lines and no defect calls for a split):**
+1. `finding_folders()` could call `child_folders(root, "incoming")` instead of its own loop. Why: the same "check where it points before `is_dir()`" loop is written twice.
+2. Move the CVSS vector/score part of `parse_labelled_fields()` into its own small function. Why: it is a separate job inside the longest function.
+3. Move the three guards at the top of `render_qa_report()` into their own function. Why: it keeps "refuse an incomplete result" apart from "write the text".
+
+The other long functions are plain step lists or one early return per case. Splitting them would add jumps without making them easier to explain.
+
+**Comment fixes made in CP-01** (comments and docstrings only, no behaviour change):
+- Module docstring: it said the tool "checks every finding against `checklists/50-report-qa.md`". It runs some of the checklist's checks on the Markdown files. The checklist's other items, and the search of the exported PDF/DOCX, still apply.
+- `resolve_in_root()` docstring: only the outside-the-root error says where the path points. The `..` error names just the path.
+- `parse_finding_heading()` docstring: the list of heading problems was missing "no ID".
+- `load_index_ids()`: added why-comments. Spaces around a column name are ignored. A short row or a blank ID cell is skipped. An ID listed twice keeps its first line.
+- `collect_qa()`: added a why-comment. Every check starts empty, so a check that finds nothing still shows PASS.
+- `render_qa_report()` comment (and the CTX-01 test comment): narrowed. They said a check the caller "forgot to run" can't show PASS. The `render_qa_report()` comment now says what the guards do. A missing name gets a readable error instead of a bare KeyError. An unknown name is refused so its problems can't drop out of the report and the exit code. An empty list can't show whether the check ran (see Limits). The test comment says it checks each result line is there, not that the check behind it ran.
+
+**Limits found in CP-01:**
+- An ID listed twice in the findings index is not reported (checked: `F-001` on two rows loads once, with no problem). Two finding *files* with the same ID are still reported by the duplicate-ID check.
+- The QA report's guards refuse a missing check *name*, not a check that was never *called*: `collect_qa()` starts every check as an empty list, and an empty list prints PASS (adversary probe: `{name: [] for name in QA_CHECKS}` prints 13 PASS lines). Catching that would need a marker that each check really ran, which is a behaviour change and needs App Dev Manager's OK.
+
+**Python 3.9 run:** `/usr/bin/python3` is the real Python 3.9.6 from Apple's Command Line Tools. The `python3` on PATH (a pyenv shim) resolves to it.
+
+| Command (from the repo root) | Result |
+|---|---|
+| `/usr/bin/python3 --version` | `Python 3.9.6` |
+| `/usr/bin/python3 -m unittest discover tools/tests` | `Ran 264 tests` … `OK` |
+| `/usr/bin/python3 -m unittest discover -s tools/tests -p 'test_compile.py'` | `Ran 255 tests` … `OK` |
+
 ## 1. compile.py
 
-### Module docstring - lines 1-12
+### Module docstring - lines 1-14
 What the tool does, how to run it, and what it never does.
 
 **If Operations asks:** "It's the description at the top of the file. It says what the tool does, how to run it, and what it never does: it doesn't run commands, doesn't use the network, and only writes to `build/`."
 
-### Imports + `MARKER_RE` - lines 14-35
+### Imports + `MARKER_RE` - lines 16-37
 Matches one whole marker, including a multi-line NOTE. Stops at the next `[[`.
 
 **Imports:** standard library only. `shutil` is used only to look pandoc up (`shutil.which`) and `shlex` only to quote the paths in its hint; neither runs anything.
@@ -36,7 +97,7 @@ Matches one whole marker, including a multi-line NOTE. Stops at the next `[[`.
 
 **Limit:** names with digits, like `[[HOST2]]`, aren't matched. That's on purpose: `templates/README.md` says marker names are capitals and underscores only.
 
-### `LEFTOVER_RE` - lines 37-44
+### `LEFTOVER_RE` - lines 39-46
 Matches the start of any leftover marker, closed or not. Same pattern as the checklist grep.
 
 **If Operations asks:** "It's the same search as the grep in our QA checklist. It flags any leftover `[[NAME`, even one missing its closing brackets, so a draft can't slip into the report unnoticed."
@@ -48,38 +109,38 @@ Matches the start of any leftover marker, closed or not. Same pattern as the che
 | `MARKER_RE` | the whole marker, `[[` to `]]` | removing markers from text |
 | `LEFTOVER_RE` | only the start, `[[NAME` | counting leftovers, including unclosed ones |
 
-### `strip_markers()` + `scan_leftover_markers()` - lines 47-68
+### `strip_markers()` + `scan_leftover_markers()` - lines 49-70
 Removes complete markers; lists leftovers with file and line number (counting from 1).
 
 **If Operations asks:** "The first removes placeholders so we can tell whether a field is really filled in. The second lists every placeholder still left, with its file and line, like `grep -n`. That count, plus any missing required fields, decides READY or DRAFT. Both run every time; they aren't options."
 
 **Why split on `"\n"`:** it gives the same line numbers as `grep -n`. `splitlines()` also splits on rare characters like form feeds, which would shift the numbers.
 
-### `expand_path()` + `parse_args()` (`--root`) - lines 71-91
+### `expand_path()` + `parse_args()` (`--root`) - lines 73-93
 Expands `~`. The root defaults to `~/cptc-work`, never the current folder.
 
 **If Operations asks:** "It reads the command-line options. If you don't say where the working copy is, it uses `~/cptc-work`, never the folder you're in, so we can't accidentally write event data into our git repo."
 
 **Why expand `~` in Python:** the shell skips it inside quotes, so `--root "~/cptc-work"` arrives as a literal `~`.
 
-### `parse_args()` (`--index`, `--final`) - lines 92-104
+### `parse_args()` (`--index`, `--final`) - lines 94-106
 Optional path to the findings index (a relative path starts at the root) and the strict-mode switch.
 
 **If Operations asks:** "`--index` points at the findings list if it isn't in the usual place. The tool only reads it, to spot IDs that are missing or extra. `--final` is the strict pre-submission mode: problems become errors, and any error fails the run (exit code 1)."
 
-### `RootError` + `validate_root()` - lines 107-129
+### `RootError` + `validate_root()` - lines 109-131
 The root must exist, be a folder, and have no `.git`. Creates nothing.
 
 **If Operations asks:** "Before doing anything, it checks that the folder exists and isn't our git clone. Our repo is public, so the tool refuses to run anywhere event data could get committed."
 
 **Limit:** only the root itself is checked for `.git`, not the folders above it. Checking those too would block anyone whose home folder is a git repo (dotfiles).
 
-### `resolve_in_root()` - lines 132-153
+### `resolve_in_root()` - lines 134-156
 Refuses `..`; follows symlinks; refuses anything outside the root and names the path.
 
 **If Operations asks:** "Every file path goes through this check. It refuses `..` and anything that ends up outside the working copy, even through a symlink. So the tool can only touch files in our working copy."
 
-### `finding_folders()` + `discover_findings()` - lines 156-198
+### `finding_folders()` + `discover_findings()` - lines 159-201
 Lists the finding files to compile: `findings/F-*.md` and `incoming/*/findings/F-*.md`, sorted by path.
 
 **If Operations asks:** "It looks in exactly two places: our own `findings/` folder and each teammate's `incoming/<name>/findings/`. Only files named `F-something.md` count. It only lists them; it never writes in `incoming/`."
@@ -88,7 +149,7 @@ Lists the finding files to compile: `findings/F-*.md` and `incoming/*/findings/F
 
 **Why sort:** the disk lists files in no fixed order. Sorting gives the same order every run, with `findings/` before `incoming/`.
 
-### `HEADING_RE` + `FILENAME_ID_RE` + `find_title_heading()` + `parse_finding_heading()` - lines 201-270
+### `HEADING_RE` + `FILENAME_ID_RE` + `find_title_heading()` + `parse_finding_heading()` - lines 204-273
 Reads the ID and title from the `### F-NNN: Title` line, and reports heading problems.
 
 **If Operations asks:** "It finds the title line of a finding. If the ID is still the `[[FINDING_ID]]` placeholder, it uses the ID from the filename instead. It flags five problems: the heading and filename IDs differ, the title isn't a `###` heading, the title text after the colon is blank, there's no ID in the heading or the filename, or there's no title line at all."
@@ -111,7 +172,7 @@ Reads the ID and title from the `### F-NNN: Title` line, and reports heading pro
 
 **Limit:** the first matching line wins, even inside a fenced code block. A template-shaped finding starts with its title, so this doesn't come up in practice.
 
-### `FIELD_LABELS` + `LABEL_LINE_RE` + CVSS regexes + `parse_labelled_fields()` - lines 273-341
+### `FIELD_LABELS` + `LABEL_LINE_RE` + CVSS regexes + `parse_labelled_fields()` - lines 276-344
 Reads the six required detail lines (`- **Severity:** …` and so on) and splits the CVSS line into vector and score.
 
 **If Operations asks:** "Each detail in a finding is a line like `- **Severity:** High`. This finds the six we need by their label: Severity, CVSS 3.1, Why this severity, Affected assets, Status and References. Values are kept as written, placeholders included; only spaces at the ends are dropped. A missing line is reported with the file and field name; it never crashes the run. If a label appears on more than one line, the first one is used and each extra one is reported at its own line."
@@ -124,7 +185,7 @@ Reads the six required detail lines (`- **Severity:** …` and so on) and splits
 
 **Limit:** the colon must be inside the bold, as in the template (`- **Severity:**`). A hand-typed `**Severity**:` is reported as missing.
 
-### `SEVERITIES` + `SEVERITY_RE` + `severity_value()` - lines 344-371
+### `SEVERITIES` + `SEVERITY_RE` + `severity_value()` - lines 347-374
 Takes the first exact level word from the Severity line, after removing markers.
 
 **If Operations asks:** "It reads the severity word: Critical, High, Medium, Low or Informational, spelled exactly like that. Placeholders are removed first, because the unfilled `[[CHOOSE: Critical / High / …]]` lists every word and would otherwise read as Critical. No level word is reported as a problem (an error with `--final`), and the finding sorts last."
@@ -133,12 +194,12 @@ Takes the first exact level word from the Severity line, after removing markers.
 
 **Why no second warning for a missing Severity line:** `parse_labelled_fields()` already reports it.
 
-### `finding_sort_key()` - lines 374-385
+### `finding_sort_key()` - lines 377-388
 Sort order: Critical → Informational, then no severity, then by ID.
 
 **If Operations asks:** "Findings are listed most severe first, and by ID within each level. Anything without a severity goes at the end so it stands out."
 
-### `DEFAULT_INDEX` + `index_location()` + `load_index_ids()` - lines 388-453
+### `DEFAULT_INDEX` + `index_location()` + `load_index_ids()` - lines 391-460
 Reads the `finding_id` column of the findings index, to compare later with the finding files.
 
 **If Operations asks:** "It reads the team's master list of finding IDs. If the list is missing or empty, the tool warns and skips the comparison instead of flagging every finding. If the file is broken, that's reported as a QA problem instead of crashing: a warning while drafting, an error with `--final`."
@@ -159,7 +220,9 @@ Reads the `finding_id` column of the findings index, to compare later with the f
 
 **Limit:** an index path that can't be opened at all (e.g. no permission, or it is a folder) isn't caught here; the error is passed on, and `run()` turns it into `compile failed: ...` with exit code 2.
 
-### `OLDER_LEFTOVER_PATTERNS` + `CODE_SPAN_RE` - lines 456-473
+**Limit (found in CP-01):** an ID listed twice in the index keeps its first line and the repeat is not reported. A short row or a blank ID cell is skipped. Two finding *files* with the same ID are still reported by `check_duplicate_ids()`.
+
+### `OLDER_LEFTOVER_PATTERNS` + `CODE_SPAN_RE` - lines 463-480
 The seven older-style placeholders, one regex each, and the pattern for an inline code span.
 
 **If Operations asks:** "These are the placeholders people typed before we had `[[...]]` markers: `<<`, `TODO`, `F-XXX`, `IR-XXX`, a bare `XX`, `YYYY` and `HH:MM`. They can show up for real (a `TODO` in quoted output), so they are only ever warnings, even with `--final`."
@@ -168,7 +231,7 @@ The seven older-style placeholders, one regex each, and the pattern for an inlin
 
 **Why `(`+).*?\1`:** a code span opens and closes with the same number of backticks, so ``` ``a ` b`` ``` is one span even with a backtick inside.
 
-### `hide_todo_marker_words()` + `scan_older_leftovers()` - lines 476-514
+### `hide_todo_marker_words()` + `scan_older_leftovers()` - lines 483-521
 Lists every older-style placeholder with file and line, skipping fenced code blocks, code spans, and the `TODO` inside a `[[TODO: ...]]` marker.
 
 **If Operations asks:** "It's the second half of the QA checklist's search. It skips fenced code blocks and code spans, because commands and output aren't prose. It also skips the word TODO inside a `[[TODO: ...]]` placeholder, because the marker check already reports that one (OQ-02). Anything else inside a placeholder, like an `F-XXX` in a NOTE, is still reported."
@@ -185,7 +248,7 @@ Lists every older-style placeholder with file and line, skipping fenced code blo
 
 **Limit:** only ```` ``` ```` / `~~~` fenced blocks and code spans are skipped. Code indented 4 spaces is checked like prose (Chunk 3 CR-1).
 
-### `REPRODUCTION_HEADING_RE` + `SECTION_END_RE` + `STEP_RE` + `reproduction_section()` + `remove_note_markers()` + `check_reproduction()` - lines 517-585
+### `REPRODUCTION_HEADING_RE` + `SECTION_END_RE` + `STEP_RE` + `reproduction_section()` + `remove_note_markers()` + `check_reproduction()` - lines 524-592
 Finds the `#### Reproduction steps` section and checks it has numbered steps, each with an `Expected:` line.
 
 **If Operations asks:** "A finding without reproduction steps gets sent back (R7). This reads the section up to the next `###` or `####` heading, removes NOTE placeholders, then counts numbered lines (`1. `, `2. `, ..., a space after the dot) and lines starting `Expected:`. It passes with at least one step and at least as many Expected lines as steps."
@@ -207,7 +270,7 @@ Finds the `#### Reproduction steps` section and checks it has numbered steps, ea
 
 **Limit:** any line starting with digits, a dot and a space or tab counts as a step, including one inside a code block.
 
-### `has_text()` + `missing_required_fields()` - lines 588-613
+### `has_text()` + `missing_required_fields()` - lines 595-620
 A value counts only if it still has a letter or digit once placeholders are removed. Lists which of the six required fields have no value.
 
 **If Operations asks:** "One thing READY needs is that all six detail lines (Severity, CVSS 3.1, Why this severity, Affected assets, Status, References) have something in them (OQ-14). Leftover punctuation from the template, like the `()` around an unfilled score, doesn't count. Reproduction steps are checked separately."
@@ -222,7 +285,7 @@ A value counts only if it still has a letter or digit once placeholders are remo
 
 **Why `isalnum()`:** it accepts any Unicode letter or digit, so a value like `Café` counts.
 
-### `check_references()` - lines 616-632
+### `check_references()` - lines 623-639
 The References line must contain an `http` link.
 
 **If Operations asks:** "Every finding needs at least one vendor or standards link. We only look on the References line, so a link somewhere else in the finding doesn't count."
@@ -233,7 +296,7 @@ The References line must contain an `http` link.
 
 **Limit:** the link must be on the `- **References:**` line itself. Links in a sub-list below it don't count, and an empty References line is then also a missing field. The template's NOTE says "on this line" (Chunk 3 CR-3).
 
-### `FULL_CVSS31_VECTOR_RE` + `check_cvss_version()` - lines 635-666
+### `FULL_CVSS31_VECTOR_RE` + `check_cvss_version()` - lines 642-673
 The CVSS vector must be a full CVSS 3.1 vector: all eight metrics, in the standard order, nothing extra.
 
 **If Operations asks:** "Our report uses CVSS 3.1, so a vector from another version, one with a metric missing or out of order, or a score typed where the vector should be, is flagged with its file and line. An unfilled `[[CVSS_VECTOR]]` is left to the marker check, so it isn't reported twice (OQ-05)."
@@ -256,14 +319,14 @@ The CVSS vector must be a full CVSS 3.1 vector: all eight metrics, in the standa
 
 **Limit:** a valid vector written in another order (e.g. `AC` before `AV`) still fails, and blocks `--final`. The user accepted this (DECISIONS 2026-10-20 Chunk 3 CR-4).
 
-### `finding_id_locations()` - lines 669-687
+### `finding_id_locations()` - lines 676-694
 Lists each finding file with its ID and the line its heading is on, for the two ID checks below.
 
 **If Operations asks:** "It collects every finding's ID with its file and line. It uses the ID the heading check chose: the heading's ID, or the filename's when the heading still says `[[FINDING_ID]]`. A finding with no ID at all is left out, because the heading check already reports it."
 
 **Why line 1 when there's no heading:** the heading check reports a missing heading at line 1, so the ID problems point at the same place.
 
-### `check_duplicate_ids()` - lines 690-708
+### `check_duplicate_ids()` - lines 697-715
 Reports any finding ID used by more than one file, naming every file.
 
 **If Operations asks:** "Two files with the same ID would give two findings the same number in the report. We report it once per ID, at the first file, and the message lists every file that uses it, ours and our teammates', so each copy can be found."
@@ -277,7 +340,7 @@ Reports any finding ID used by more than one file, naming every file.
 
 **Why the ID mismatch isn't reported here:** a filename that doesn't match its heading is reported only by `parse_finding_heading()` (C-05), so it's never reported twice.
 
-### `check_index_membership()` - lines 711-736
+### `check_index_membership()` - lines 718-743
 Compares the finding files' IDs with the findings index: IDs missing from it, and IDs in it with no file.
 
 **If Operations asks:** "The index is the team's master list of IDs. A finding that isn't on the list is reported at the finding; an ID on the list with no finding file is reported at its line in the index. If the index is missing or broken, nothing is compared, because the loader has already warned and every finding would look extra."
@@ -293,7 +356,7 @@ Compares the finding files' IDs with the findings index: IDs missing from it, an
 
 **Limit:** an ID on two index rows isn't reported; `load_index_ids()` keeps the first row's line. If two finding files really use that ID, the duplicate check reports them once both files exist (Chunk 4 CR-2).
 
-### `finding_readiness()` - lines 739-763
+### `finding_readiness()` - lines 746-770
 Decides READY or DRAFT for one finding, and gives the readiness line for the QA report.
 
 **If Operations asks:** "A finding is READY when it has no leftover placeholders, none of the six required detail lines is empty, it has a real severity word, and its title isn't blank. Anything else is DRAFT, and the line says why, e.g. `DRAFT: 2 unresolved markers, 1 missing fields`. READY means nothing is left to fill in. The other checks (reproduction steps, the http reference, the CVSS version, heading problems, duplicate IDs) are reported separately in the QA report and don't change READY."
@@ -315,19 +378,19 @@ Decides READY or DRAFT for one finding, and gives the readiness line for the QA 
 
 **Limit:** a finding with no Severity line at all shows both `1 missing fields` and `no severity word`. Both are true; avoiding it would need a special case.
 
-### `draft_banner()` - lines 766-776
+### `draft_banner()` - lines 773-783
 The line put above a draft in the combined findings file: its readiness line inside a NOTE, e.g. `[[NOTE: DRAFT: 0 unresolved markers, 0 missing fields, no severity word]]`.
 
 **If Operations asks:** "Every draft in the combined file gets this line above it, saying every reason it's a draft. It is itself a placeholder, so if a draft is pasted into `report.md` with its banner, the `--final` check of `report.md` (C-20) reports it."
 
 **Why the whole readiness line (user decision 2026-10-20 Chunk 4 CR-3):** the spec's banner only counted markers, so a draft held back by its severity, title or a missing field read `0 unresolved markers`, and a writer might delete it. Departs from the spec's literal `[[NOTE: DRAFT: n unresolved markers]]`.
 
-### `TABLE_TEXT_LABELS` + `field_value()` + `summary_row()` - lines 779-806
+### `TABLE_TEXT_LABELS` + `field_value()` + `summary_row()` - lines 786-813
 Collects one finding's five summary-table cells, exactly as written.
 
 **If Operations asks:** "Each finding becomes one row: ID, title, severity, affected assets and status. Values are copied as written. A missing value is a blank cell, so the Severity cell is the severity word or blank (OQ-16)."
 
-### `has_unescaped_pipe()` + `check_table_pipes()` - lines 809-835
+### `has_unescaped_pipe()` + `check_table_pipes()` - lines 816-842
 Warns when a title, Affected assets or Status value contains a `|` that isn't escaped as `\|`.
 
 **If Operations asks:** "A `|` splits a Markdown table cell, so the row would break. We report it and name the finding, e.g. `F-001: '|' in Title breaks the summary table` (a warning while drafting, an error with `--final`), but never change what the tester wrote. A `\|` is Markdown's way to write a `|` inside a table, so it isn't reported."
@@ -340,7 +403,7 @@ Warns when a title, Affected assets or Status value contains a `|` that isn't es
 
 **Limit:** the row is still written broken; the warning is how it gets fixed.
 
-### `table_line()` + `summary_sort_key()` + `render_findings_summary()` - lines 838-874
+### `table_line()` + `summary_sort_key()` + `render_findings_summary()` - lines 845-881
 Writes `build/findings-summary.md`: the findings table and the severity count table.
 
 **If Operations asks:** "The first table lists every finding, most severe first and by ID within each level, with no-severity findings last. The second counts each level, zeros included, and Total counts every finding, so it always equals the number of rows."
@@ -364,7 +427,7 @@ Writes `build/findings-summary.md`: the findings table and the severity count ta
 
 **Limit:** a blank-title finding (DRAFT) is still listed, with an empty Title cell.
 
-### `TIMELINE_TYPES` + `TIMELINE_TIME_RE` + `TOP_HEADING_RE` - lines 877-890
+### `TIMELINE_TYPES` + `TIMELINE_TIME_RE` + `TOP_HEADING_RE` - lines 884-897
 The three timeline file types, the time format, and the file's top `#` heading.
 
 **If Operations asks:** "Only incident reports, status updates and inject responses go in the timeline (OQ-11). Each type has its own time line: `Time reported`, `Time` or `Sent`. A time must be `YYYY-MM-DD HH:MM`, so sorting the text also sorts by time (OQ-01)."
@@ -377,14 +440,14 @@ The three timeline file types, the time format, and the file's top `#` heading.
 
 **Limit:** the format check is the spec's pattern, so an impossible date like `2026-13-45 25:99` still passes.
 
-### `child_folders()` + `timeline_folders()` + `discover_timeline_files()` - lines 893-940
+### `child_folders()` + `timeline_folders()` + `discover_timeline_files()` - lines 900-947
 Lists the timeline files: `field-notes/<name>/` and `incoming/<owner>/field-notes/<name>/`, sorted by path.
 
 **If Operations asks:** "It looks in each person's notes folder, ours and our teammates'. Only `IR-`, `SU-` and `INJ-` files count; `NOTE-` files are personal notes, not client interactions. Like the findings list, every folder and file is checked first, so a link pointing outside the working copy is refused with its path named."
 
 **Why a missing folder is fine:** a working copy may not have `field-notes/` yet (2026-10-19 repo split), so it gives an empty list instead of an error.
 
-### `parse_timeline_entry()` - lines 943-994
+### `parse_timeline_entry()` - lines 950-1001
 Reads one timeline file into its row: time, type, summary and reference.
 
 **If Operations asks:** "The type comes from the filename, the time from that type's labelled line, the summary from the file's `#` heading exactly as written (OQ-04), and the reference is the filename without `.md`. A missing or badly written time is reported, and that file goes at the end of the timeline. It's a warning while drafting and an error with `--final` (user decision 2026-10-21 C-19 Q1), because an unfilled time is only caught here: timeline files aren't checked for leftover markers."
@@ -406,7 +469,7 @@ Reads one timeline file into its row: time, type, summary and reference.
 
 **Limit:** the first `# ` line wins, even one inside a code block. The templates start with their heading, so this doesn't come up in practice.
 
-### `timeline_sort_key()` + `render_timeline()` - lines 997-1020
+### `timeline_sort_key()` + `render_timeline()` - lines 1004-1027
 Writes `build/interactions-timeline.md`: one row per timeline file, sorted by time.
 
 **If Operations asks:** "Valid times come first, in time order. Files with a missing or bad time come after them, so they stand out. Ties go by filename, so every run gives the same order. Values are shown as written, so an unfilled time keeps its placeholders, and the `--final` check of `report.md` (C-20) catches it if it's pasted there."
@@ -419,7 +482,7 @@ Writes `build/interactions-timeline.md`: one row per timeline file, sorted by ti
 | [[DATE_SENT]] [[TIME_SENT]] | Inject | Inject Response: Scope | INJ-scope |
 ```
 
-### `combined_sort_key()` + `render_combined_findings()` - lines 1023-1054
+### `combined_sort_key()` + `render_combined_findings()` - lines 1030-1061
 Writes `build/findings-combined.md`: every finding's full text, in report order, with a banner above each draft.
 
 **If Operations asks:** "It joins all the findings, most severe first, ready to paste under the report's Section 5. Each finding's text is copied unchanged, except that a missing final line break is added, so its `###` and `####` headings fit. A draft gets its `[[NOTE: DRAFT: ...]]` readiness line right above its heading, so it can't slip into the report unnoticed."
@@ -430,10 +493,10 @@ Writes `build/findings-combined.md`: every finding's full text, in report order,
 
 **Limit:** two files with the same ID stay in path order (the duplicate check reports them).
 
-### `QA_CHECKS` + `ALWAYS_WARNING_CHECKS` - lines 1057-1077
+### `QA_CHECKS` + `ALWAYS_WARNING_CHECKS` - lines 1064-1084
 The 13 named checks in `qa-report.txt`, in report order, and the one check that is always only a warning.
 
-**If Operations asks:** "These are the checks from our QA checklist plus the ones the spec adds. Each one gets a PASS or FAIL line in the QA report every run, so a check can't be skipped without anyone noticing."
+**If Operations asks:** "These are checks from our QA checklist plus the ones the spec adds. Every check gets a PASS or FAIL line every run, so a check can't silently drop out of the report."
 
 | Check | Reports | From |
 |---|---|---|
@@ -451,7 +514,7 @@ The 13 named checks in `qa-report.txt`, in report order, and the one check that 
 | summary table | a `\|` that would break a table row | `check_table_pipes()` |
 | interactions timeline | a bad or missing time, no `#` heading, a `\|` in the Summary | `parse_timeline_entry()` |
 
-### `check_required_fields()` - lines 1080-1095
+### `check_required_fields()` - lines 1087-1102
 Reports each of the six required detail lines that is there but has no value, at its line, e.g. `Status has no value`.
 
 **If Operations asks:** "READY needs all six detail lines filled in. This makes each empty one a QA problem, so `--final` can't pass a finding that is still DRAFT. It uses the same rule as READY, so leftover punctuation like `()` doesn't count as a value."
@@ -470,7 +533,7 @@ Reports each of the six required detail lines that is there but has no value, at
 
 **Limit:** some problems show up twice, because two checks are both right. An unfilled Severity is a severity problem, a required-fields problem and a leftover marker. An empty CVSS vector is a CVSS version problem and a required-fields problem. Avoiding that would need special cases.
 
-### `qa_level()` - lines 1098-1107
+### `qa_level()` - lines 1105-1114
 Gives each problem its level: always a warning in draft mode; an error in `--final`, except for older-style leftovers.
 
 **If Operations asks:** "While drafting, every problem is a warning, so the tool never gets in anyone's way. With `--final`, problems become errors and fail the run. Older-style leftovers like `TODO` can be real text, so they stay warnings."
@@ -483,7 +546,7 @@ Gives each problem its level: always a warning in draft mode; an error in `--fin
 | timeline problem | warning | error (user decision 2026-10-21 C-19 Q1) |
 | every other problem | warning | error |
 
-### `hit_diagnostics()` + `check_problems()` - lines 1110-1138
+### `hit_diagnostics()` + `check_problems()` - lines 1117-1145
 Turns every shape of problem into one: (level, file, line, message).
 
 **If Operations asks:** "The checks report problems in a few slightly different shapes. Before printing, they're all turned into one shape: level, file, line, message. A problem that isn't on one line, like a missing detail line, gets no line number."
@@ -495,19 +558,19 @@ Turns every shape of problem into one: (level, file, line, message).
 | (file, line, matched text) | both leftover scanners | first `hit_diagnostics()`: message `leftover marker [[HOST` or `older-style leftover TODO` |
 | (level, file, line, message) | `load_index_ids()` | added as it is; line 0 means the whole file |
 
-### `problem_location()` + `problem_line()` - lines 1141-1153
+### `problem_location()` + `problem_line()` - lines 1148-1160
 Prints one problem as `ERROR: file:line: message`, or `ERROR: file: message` when it has no line.
 
 **If Operations asks:** "Every problem shows the file and line, like `grep -n`, so it can be found straight away. A problem with the whole file has no line to show."
 
-### `count_levels()` + `check_status()` - lines 1156-1173
+### `count_levels()` + `check_status()` - lines 1163-1180
 Counts warnings and errors; a check is `PASS`, or `FAIL (E errors, W warnings)`.
 
 **If Operations asks:** "A check with no problems is PASS. Anything else is FAIL with its counts, so you can see at a glance whether it blocks `--final` (errors) or is only worth a look (warnings)."
 
 **Why FAIL even with only warnings (user decision 2026-10-21 C-19 Q3):** the problems stay visible. So a `--final` run can show a FAIL line and still exit 0; only errors decide the exit code.
 
-### `InputError` + `read_markdown()` - lines 1176-1193
+### `InputError` + `read_markdown()` - lines 1183-1200
 Reads a file's text as it is on disk, minus an invisible start marker (BOM) if there is one; a file that isn't UTF-8 stops the run with an error naming it.
 
 **If Operations asks:** "Every Markdown file is read the same way. Windows line endings are kept, so the combined findings file copies each finding unchanged. An invisible start marker that some Windows editors add is dropped. If a file isn't plain UTF-8 text, the run stops and names the file."
@@ -518,7 +581,7 @@ Reads a file's text as it is on disk, minus an invisible start marker (BOM) if t
 
 **Limit:** a file saved in another encoding (e.g. Windows-1252) stops the run (exit code 2) instead of being guessed at.
 
-### `REPORT_FILE` + `check_report()` - lines 1196-1232
+### `REPORT_FILE` + `check_report()` - lines 1203-1239
 In `--final` only: checks `report.md` for leftover markers (errors) and older-style leftovers (warnings). Draft mode doesn't open it.
 
 **If Operations asks:** "`report.md` is put together by hand at the midpoint, so draft runs leave it alone. The final check looks for anything left unfilled in it, like a pasted draft banner. It only reads the file; it never changes it."
@@ -533,7 +596,7 @@ In `--final` only: checks `report.md` for leftover markers (errors) and older-st
 
 **Why the same scanners:** they're the two checks the QA checklist runs by hand on the report, with the same rules as for findings. Code blocks and code spans are skipped for older-style leftovers only; a marker inside a code block is still a leftover marker, so it's an error in `--final`.
 
-### `render_qa_report()` - lines 1235-1284
+### `render_qa_report()` - lines 1242-1295
 Writes `build/qa-report.txt`: the mode, one readiness line per finding, then PASS or FAIL for every check with its problems, then the `report.md` section in `--final`.
 
 **If Operations asks:** "It's the QA checklist's result for every file at once. Each finding says READY or why it's a draft, and each check says PASS or FAIL with the exact file and line of every problem."
@@ -567,30 +630,32 @@ FAIL (1 errors, 0 warnings) leftover markers
 PASS older-style leftovers
 ```
 
-**Why every check must be given:** a check the caller forgot to run would otherwise show PASS. A missing or misspelt check name raises an error instead, and so does a `--final` report without the `report.md` result.
+**Why every check must be given:** a missing check name gives a readable error (`QA check not run: <name>`) instead of a bare KeyError. An unknown (e.g. misspelt) name is refused because its problems would otherwise be dropped from both the report and the exit code, which read only `QA_CHECKS` names. A `--final` report without the `report.md` result is refused too.
+
+**Limit:** an empty list is read as "ran and found nothing". `collect_qa()` starts every check as an empty list, so if a later change stopped calling one check, the report would still show PASS for it; this guard can't catch that.
 
 **Why the readiness line as it is (C-15 carry-forward):** it's the same text as the draft banner, so the two always agree.
 
 **Limit:** problems are grouped by check, not by file. One finding's problems can be spread over several checks.
 
-### `check_finding()` - lines 1287-1332
+### `check_finding()` - lines 1298-1343
 Runs every check that looks at one finding on its own, and builds its summary row, its combined-file entry and its readiness line.
 
 **If Operations asks:** "This is where one finding goes through every per-finding check. The checks that compare files with each other (duplicate IDs, the index) run afterwards, once every finding is read."
 
-### `collect_qa()` - lines 1335-1378
+### `collect_qa()` - lines 1346-1391
 Reads every input and runs every check: each finding, then duplicate IDs and the index across all findings, then each timeline file, then `report.md` (`--final` only).
 
 **If Operations asks:** "It reads our findings and our teammates', the index and everyone's timeline files, and collects every problem by check. It only reads; writing comes next, in `write_outputs()`."
 
 **Why file names are shown relative to the root:** `findings/F-001-x.md` is the same on every tester's machine; the full path isn't.
 
-### `all_problems()` + `qa_summary_line()` - lines 1381-1399
+### `all_problems()` + `qa_summary_line()` - lines 1394-1412
 Lists every problem, `report.md`'s included, and writes the closing line, e.g. `QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 4 errors`.
 
 **If Operations asks:** "The last line sums up the run: how many findings, how many are READY, and how many warnings and errors there are in total."
 
-### `BUILD_FOLDER` + `OUTPUT_FILES` + `build_path()` - lines 1402-1428
+### `BUILD_FOLDER` + `OUTPUT_FILES` + `build_path()` - lines 1415-1441
 The four output files, and the check that each one is safe to write.
 
 **If Operations asks:** "Writing a file follows links. So before writing anything, every output path is checked: a link there could make the tool overwrite `report.md` or write into a teammate's `incoming/` folder. The tool creates `build/` itself, so a link only gets there if someone makes one by hand."
@@ -609,7 +674,7 @@ The four output files, and the check that each one is safe to write.
 
 **Why `st_nlink`:** it counts a file's names. A hard link to `report.md` has two, and writing one name would change the other. Folders always have more than one, so only files are checked.
 
-### `readiness_lines()` + `write_outputs()` - lines 1431-1478
+### `readiness_lines()` + `write_outputs()` - lines 1444-1491
 Writes the four `build/` files from scratch and returns the screen lines.
 
 **If Operations asks:** "Every run rewrites all four files completely, so nothing old is left in them. `report.md` is never written. Every output path is checked before the first write, so a refused run leaves `build/` exactly as it was."
@@ -636,7 +701,7 @@ QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 4 errors
 
 **Limit:** if the disk fills up halfway, the files already written stay written. The path checks only rule out a refused run changing anything.
 
-### `pandoc_hint()` - lines 1481-1494
+### `pandoc_hint()` - lines 1494-1507
 If pandoc is installed, a last line with the exact command to turn `report.md` into a Word file. The tool never runs it.
 
 **If Operations asks:** "pandoc converts Markdown to Word or PDF. If it's installed, we print the command so it can be copied. Our tool runs no commands at all, so it only shows it."
@@ -647,7 +712,7 @@ If pandoc is installed, a last line with the exact command to turn `report.md` i
 
 **Limit:** the hint shows even when `report.md` doesn't exist yet, and in draft mode.
 
-### `run()` - lines 1497-1523
+### `run()` - lines 1510-1536
 Does a whole compile and returns (exit code, QA report text, screen lines), printing nothing, so the notebook's Compile button can call it too.
 
 **If Operations asks:** "It runs every step in order: check the root, read and check everything, write the four files, add the pandoc hint. It doesn't print, so the notebook can show the same result in the browser."
@@ -660,7 +725,7 @@ Does a whole compile and returns (exit code, QA report text, screen lines), prin
 
 **Why 2 for a failure:** it's different from 1, so a script can tell "the report has problems" from "the tool couldn't run". Python's argparse also uses 2 for a bad option.
 
-### `main()` + `if __name__ == "__main__"` - lines 1526-1538
+### `main()` + `if __name__ == "__main__"` - lines 1539-1551
 Reads the options, runs, prints each line and exits with the code.
 
 **If Operations asks:** "This is what runs when you type `python3 tools/compile.py`. Importing the file (as the notebook does) runs nothing."
@@ -1048,7 +1113,55 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 
 **If Operations asks:** "These read our own source code and prove it can't run commands, and that importing it does nothing."
 
-#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 2085-2086
+#### `CompleteRunTests` - lines 2085-2154
+CTX-01. A whole event-shaped working copy, every part filled in: your own finding, a teammate's finding in `incoming/bob/`, an index listing both, one status update and a clean `report.md`.
+- `--final` returns 0. After the four WROTE lines come only `report.md checked: 0 problems` and `QA: 2 findings; 2 READY; 0 DRAFT; 0 warnings; 0 errors`, so there is no WARNING or ERROR line
+- the QA report has `PASS <name>` for every name in `QA_CHECKS`, in order, plus the two `report.md` checks. "required fields" (the rationale), "reproduction steps" (the indented `Expected:` lines) and "references" (the `https://` link) are among them
+- all four `build/` files are written with the expected content: `qa-report.txt` equals the returned text, both summary rows and the counts row, the status-update timeline row, both findings unchanged in `findings-combined.md` with no DRAFT banner; `report.md` is unchanged
+
+**Limit:** "every check is PASS" means every result line is there and says PASS. It doesn't prove the check behind each line ran (see `render_qa_report()`).
+
+**If Operations asks:** "This is the spec's 'a correctly filled finding passes every check in `--final`', run end to end through the real tool on a fake working copy."
+
+#### `DoneMatrixTests` - lines 2157-2209
+CTX-02. The spec's Definition-of-done table, one row per case, each in a fresh fake working copy:
+
+| Case | Draft exit | `--final` exit | Finding | `--final` ERROR lines |
+|---|---|---|---|---|
+| marker in a finding (`[[HOST]]`) | 0 | 1 | DRAFT | the `[[HOST` leftover marker, at line 7 |
+| marker only in `report.md` | 0 | 1 | READY | the `[[EXEC_SUMMARY` leftover marker in `report.md`, at line 3 |
+| `report.md` absent | 0 | 0 | READY | none; the `report.md NOT FOUND` line is shown |
+
+- each draft run also shows the DRAFT banner exactly for the draft, no screen line that mentions `report.md` (draft mode ignores it; the pandoc hint is patched out) and no ERROR line
+- each `--final` run's ERROR lines are exactly the listed ones, so the exit code 1 comes from the intended marker
+
+**If Operations asks:** "This is the table from our definition of done, as one test: a draft never stops the tool, and `--final` blocks a leftover marker whether it's in a finding or in the report."
+
+#### `EVENT_F001` + `EVENT_F002` - lines 2212-2254
+Findings A and B from the event-scenario note, copied exactly: a clean finding, and one with one real step followed by pasted output that starts with an IP address (`10.0.0.5 dc01 signing:false`). All names and addresses are fake.
+
+**If Operations asks:** "Two realistic fake findings from the practice scenario we used to review each chunk."
+
+#### `EventScenarioTests` - lines 2257-2370
+CTX-03. One fake working copy holding the traps that already caused a review finding or a fix, one problem-causing trap per file. The files are written as bytes so the BOM and CRLF reach the disk exactly.
+
+| File | Trap | Expected |
+|---|---|---|
+| `findings/F-001` | saved with a UTF-8 BOM (Chunk 5 CR-1) | READY; its title is in the summary; no BOM in `findings-combined.md` |
+| `incoming/bob/findings/F-002` | CRLF line endings (Chunk 2 card) and the IP-first output line (Chunk 3 CR-2) | READY; reproduction steps PASS; its CRLF text copied unchanged |
+| `findings/F-003` | lowercase `high` (C-15 Q2) | DRAFT: `0 unresolved markers, 0 missing fields, no severity word`, plus the "no severity" problem |
+| `findings/F-004` | a second Severity line (Chunk 2 fix) | READY, plus the `duplicate Severity line; line 3 is used` problem |
+| `field-notes/alice/SU-midpoint.md` | saved with a UTF-8 BOM (Chunk 5 CR-1) | timeline row `2026-11-07 14:00`, Summary `Client Status Update` |
+
+- draft returns 0 with exactly the two problems as WARNING lines; `--final` returns 1 with exactly the same two as ERROR lines
+- the readiness lines are the same in both modes, and exactly one DRAFT banner is written
+- every source file is byte-for-byte unchanged after both runs
+
+**Why these outcomes:** the expected outcomes come from the DECISIONS entries (Chunk 3 CR-2, C-15 Q2), which win over the note's wording.
+
+**If Operations asks:** "These are the real mistakes we expect on the day, like a file saved by Windows Notepad, Windows line endings, pasted command output and a lowercase severity. The test proves the tool handles each one the way we decided."
+
+#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 2373-2374
 Let one test file run on its own: `python3 tools/tests/test_compile.py`.
 
 **If Operations asks:** "So one test file can be run by itself. Normally we run them all with `python3 -m unittest discover tools/tests`."

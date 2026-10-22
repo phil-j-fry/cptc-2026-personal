@@ -2,7 +2,9 @@
 
 Reads the finding files in the working copy (yours and teammates' in
 incoming/), writes report-ready tables and a combined findings file to build/,
-and checks every finding against checklists/50-report-qa.md.
+and runs some of the checks from checklists/50-report-qa.md on the Markdown
+files. The checklist's other items, and the search of the exported PDF/DOCX,
+still apply.
 
 Usage: python3 tools/compile.py [--root PATH] [--index PATH] [--final]
 
@@ -132,8 +134,9 @@ def validate_root(root):
 def resolve_in_root(root, path):
     """Return path as a full resolved path inside root, or raise RootError.
 
-    A relative path is taken relative to root. The error names the path the
-    user gave and where it really points, so they can see which one is wrong.
+    A relative path is taken relative to root. Every error names the path the
+    user gave; the outside-the-root error also says where it really points,
+    so they can see which one is wrong.
     """
     # Check `..` as a whole path part, not as text: "a..b.md" is a fine
     # filename, but "../x" or "findings/../../x" climbs out of the folder.
@@ -230,7 +233,7 @@ def parse_finding_heading(file_name, text):
       line              the heading's line number (from 1), or None
       diagnostics       (file_name, line_number, message) problems
     Heading problems (ID mismatch, wrong heading level, no heading, no
-    title) are reported only here, so no other check repeats them.
+    title, no ID) are reported only here, so no other check repeats them.
     """
     match = FILENAME_ID_RE.match(Path(file_name).name)
     filename_id = match.group(0) if match else None
@@ -436,6 +439,8 @@ def load_index_ids(root, index, final):
     if header is None:
         return None, [("warning", shown, 1,
                        "findings index is empty; ID comparison skipped")]
+    # Spaces around a column name (e.g. "finding_id " typed in a
+    # spreadsheet) don't hide the column.
     columns = [name.strip() for name in header]
     if "finding_id" not in columns:
         return None, [(problem_level, shown, 1,
@@ -443,6 +448,8 @@ def load_index_ids(root, index, final):
     column = columns.index("finding_id")
     ids = {}
     for line_number, row in rows:
+        # A short row or a blank ID cell is skipped. An ID listed twice
+        # keeps its first line; the repeat is not reported.
         if len(row) > column and row[column].strip():
             ids.setdefault(row[column].strip(), line_number)
     if not ids:
@@ -1244,8 +1251,12 @@ def render_qa_report(final, readiness, checks, report):
     in --final its own "report.md:" section. Raises ValueError if a check is
     missing or unknown, or if --final has no report.md result.
     """
-    # Every check must be given, even with no problems: a check the caller
-    # forgot to run must not show PASS. A misspelt name is refused too.
+    # Every check must be given, even with no problems, so a missing one
+    # gets a readable error instead of a bare KeyError below. An unknown
+    # (e.g. misspelt) name is refused: its problems would otherwise be left
+    # out of the report and of the exit code, since both read only
+    # QA_CHECKS names. An empty list is taken as "ran and found nothing";
+    # this can't tell whether the check really ran.
     for name in QA_CHECKS:
         if name not in checks:
             raise ValueError("QA check not run: " + name)
@@ -1344,6 +1355,8 @@ def collect_qa(root, index, final):
     Raises RootError if a path points outside the root.
     """
     root = Path(root).resolve()
+    # Every check starts with no problems, so a check that finds nothing
+    # (e.g. no timeline files) still shows PASS in the QA report.
     checks = {}
     for name in QA_CHECKS:
         checks[name] = []
