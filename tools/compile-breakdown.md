@@ -2,7 +2,7 @@
 
 Every block of `compile.py`, its test helpers, its tests, and the related edits outside `tools/`. The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code at the end of Chunk 6. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code after the Chunk 7 review. Chunk 7's own tasks changed only docs, the report QA list and the CI workflow; its review added `misplaced_timeline_files()` and its tests (C-23, CT-23). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 | Term | Meaning |
 |---|---|
@@ -18,7 +18,7 @@ Line ranges match the code at the end of Chunk 6. The implementor updates this f
 | findings index | `tracker/findings-index.csv`: the team's master list of finding IDs, in its `finding_id` column |
 | incoming | `incoming/<name>/`: a teammate's files copied in; the tools only read it (rule R18) |
 | older-style leftover | a placeholder from before the `[[...]]` markers, like `TODO`, `XX` or `YYYY`; always a warning |
-| timeline file | an `IR-` (incident report), `SU-` (status update) or `INJ-` (inject response) file in `field-notes/<name>/`; one row each in the interactions timeline |
+| timeline file | an `IR-` (incident report), `SU-` (status update) or `INJ-` (inject response) file in `field-notes/<name>/`; one row each in the interactions timeline (one saved in a likely wrong spot is reported instead; C-23) |
 
 ## Size and explainability (CP-01)
 
@@ -32,7 +32,7 @@ Measured on 2026-10-21, after the CP-01 comment fixes below. No code was compres
 | blank | 187 |
 | **total** | **1551** |
 
-A line with code and a comment after it counts as code (there is 1). The spec's guideline is about 200–250 lines (Constraint 6, "guidelines, not hard caps"). Code lines alone are about three times that.
+A line with code and a comment after it counts as code (there is 1). Since then, C-23 (Chunk 7 CR-3) added `misplaced_timeline_files()` (26 lines, 16 of them code) and 2 lines in `collect_qa()`, so the file is 1581 lines. The spec's guideline is about 200–250 lines (Constraint 6, "guidelines, not hard caps"). Code lines alone are about three times that.
 
 **Why it is bigger than the guideline:** it does more than the spec's first estimate covered:
 - 13 named QA checks, plus the two `report.md` checks in `--final`.
@@ -78,8 +78,8 @@ The other long functions are plain step lists or one early return per case. Spli
 | Command (from the repo root) | Result |
 |---|---|
 | `/usr/bin/python3 --version` | `Python 3.9.6` |
-| `/usr/bin/python3 -m unittest discover tools/tests` | `Ran 264 tests` … `OK` |
-| `/usr/bin/python3 -m unittest discover -s tools/tests -p 'test_compile.py'` | `Ran 255 tests` … `OK` |
+| `/usr/bin/python3 -m unittest discover tools/tests` | `Ran 268 tests` … `OK` (264 at CP-01; CT-23 added 4) |
+| `/usr/bin/python3 -m unittest discover -s tools/tests -p 'test_compile.py'` | `Ran 259 tests` … `OK` |
 
 ## 1. compile.py
 
@@ -447,7 +447,28 @@ Lists the timeline files: `field-notes/<name>/` and `incoming/<owner>/field-note
 
 **Why a missing folder is fine:** a working copy may not have `field-notes/` yet (2026-10-19 repo split), so it gives an empty list instead of an error.
 
-### `parse_timeline_entry()` - lines 950-1001
+### `misplaced_timeline_files()` - lines 950-975
+Reports each `IR-`, `SU-` or `INJ-` file saved in a likely wrong spot, which the timeline would otherwise leave out without a word (Chunk 7 CR-3).
+
+**If Operations asks:** "The timeline only reads files inside a person's folder, `field-notes/<name>/`. A file saved by hand at the top of the working copy, or straight into `field-notes/`, would just be missing from it. This looks in those two spots, and the same two in each teammate's `incoming/<owner>/`, and names each such file: a warning while drafting, an error with `--final`."
+
+| File | Printed line (draft) |
+|---|---|
+| `IR-001-x.md` at the top of the root | `WARNING: IR-001-x.md: not in field-notes/<name>/, so it is not in the timeline` |
+| `field-notes/IR-002-x.md` | the same message, naming `field-notes/IR-002-x.md` |
+| `incoming/bob/SU-x.md`, `incoming/bob/field-notes/INJ-y.md` | one line each |
+| `field-notes/alice/IR-003-x.md` | none: it's in the timeline |
+| a `NOTE-` file anywhere | none: not a timeline file |
+
+**Why line 0:** the problem is the whole file, so it's printed as `file: message` with no line number, as for the findings index.
+
+**Why under the `interactions timeline` check:** that check is already in `QA_CHECKS`, so these lines can't drop out of the report, and they get the same levels as other timeline problems (C-19 Q1).
+
+**Why check each file before `is_file()`:** `is_file()` follows a link, so, as in `child_folders()`, a file linked outside the working copy is refused with its name first.
+
+**Limit:** only those two spots are searched (the user rejected searching everywhere). A file in a deeper folder, like `field-notes/alice/old/`, or in any other folder, like `findings/`, is still left out of the timeline with no line.
+
+### `parse_timeline_entry()` - lines 978-1029
 Reads one timeline file into its row: time, type, summary and reference.
 
 **If Operations asks:** "The type comes from the filename, the time from that type's labelled line, the summary from the file's `#` heading exactly as written (OQ-04), and the reference is the filename without `.md`. A missing or badly written time is reported, and that file goes at the end of the timeline. It's a warning while drafting and an error with `--final` (user decision 2026-10-21 C-19 Q1), because an unfilled time is only caught here: timeline files aren't checked for leftover markers."
@@ -469,7 +490,7 @@ Reads one timeline file into its row: time, type, summary and reference.
 
 **Limit:** the first `# ` line wins, even one inside a code block. The templates start with their heading, so this doesn't come up in practice.
 
-### `timeline_sort_key()` + `render_timeline()` - lines 1004-1027
+### `timeline_sort_key()` + `render_timeline()` - lines 1032-1055
 Writes `build/interactions-timeline.md`: one row per timeline file, sorted by time.
 
 **If Operations asks:** "Valid times come first, in time order. Files with a missing or bad time come after them, so they stand out. Ties go by filename, so every run gives the same order. Values are shown as written, so an unfilled time keeps its placeholders, and the `--final` check of `report.md` (C-20) catches it if it's pasted there."
@@ -482,7 +503,7 @@ Writes `build/interactions-timeline.md`: one row per timeline file, sorted by ti
 | [[DATE_SENT]] [[TIME_SENT]] | Inject | Inject Response: Scope | INJ-scope |
 ```
 
-### `combined_sort_key()` + `render_combined_findings()` - lines 1030-1061
+### `combined_sort_key()` + `render_combined_findings()` - lines 1058-1089
 Writes `build/findings-combined.md`: every finding's full text, in report order, with a banner above each draft.
 
 **If Operations asks:** "It joins all the findings, most severe first, ready to paste under the report's Section 5. Each finding's text is copied unchanged, except that a missing final line break is added, so its `###` and `####` headings fit. A draft gets its `[[NOTE: DRAFT: ...]]` readiness line right above its heading, so it can't slip into the report unnoticed."
@@ -493,7 +514,7 @@ Writes `build/findings-combined.md`: every finding's full text, in report order,
 
 **Limit:** two files with the same ID stay in path order (the duplicate check reports them).
 
-### `QA_CHECKS` + `ALWAYS_WARNING_CHECKS` - lines 1064-1084
+### `QA_CHECKS` + `ALWAYS_WARNING_CHECKS` - lines 1092-1112
 The 13 named checks in `qa-report.txt`, in report order, and the one check that is always only a warning.
 
 **If Operations asks:** "These are checks from our QA checklist plus the ones the spec adds. Every check gets a PASS or FAIL line every run, so a check can't silently drop out of the report."
@@ -514,7 +535,7 @@ The 13 named checks in `qa-report.txt`, in report order, and the one check that 
 | summary table | a `\|` that would break a table row | `check_table_pipes()` |
 | interactions timeline | a bad or missing time, no `#` heading, a `\|` in the Summary | `parse_timeline_entry()` |
 
-### `check_required_fields()` - lines 1087-1102
+### `check_required_fields()` - lines 1115-1130
 Reports each of the six required detail lines that is there but has no value, at its line, e.g. `Status has no value`.
 
 **If Operations asks:** "READY needs all six detail lines filled in. This makes each empty one a QA problem, so `--final` can't pass a finding that is still DRAFT. It uses the same rule as READY, so leftover punctuation like `()` doesn't count as a value."
@@ -533,7 +554,7 @@ Reports each of the six required detail lines that is there but has no value, at
 
 **Limit:** some problems show up twice, because two checks are both right. An unfilled Severity is a severity problem, a required-fields problem and a leftover marker. An empty CVSS vector is a CVSS version problem and a required-fields problem. Avoiding that would need special cases.
 
-### `qa_level()` - lines 1105-1114
+### `qa_level()` - lines 1133-1142
 Gives each problem its level: always a warning in draft mode; an error in `--final`, except for older-style leftovers.
 
 **If Operations asks:** "While drafting, every problem is a warning, so the tool never gets in anyone's way. With `--final`, problems become errors and fail the run. Older-style leftovers like `TODO` can be real text, so they stay warnings."
@@ -546,7 +567,7 @@ Gives each problem its level: always a warning in draft mode; an error in `--fin
 | timeline problem | warning | error (user decision 2026-10-21 C-19 Q1) |
 | every other problem | warning | error |
 
-### `hit_diagnostics()` + `check_problems()` - lines 1117-1145
+### `hit_diagnostics()` + `check_problems()` - lines 1145-1173
 Turns every shape of problem into one: (level, file, line, message).
 
 **If Operations asks:** "The checks report problems in a few slightly different shapes. Before printing, they're all turned into one shape: level, file, line, message. A problem that isn't on one line, like a missing detail line, gets no line number."
@@ -558,19 +579,19 @@ Turns every shape of problem into one: (level, file, line, message).
 | (file, line, matched text) | both leftover scanners | first `hit_diagnostics()`: message `leftover marker [[HOST` or `older-style leftover TODO` |
 | (level, file, line, message) | `load_index_ids()` | added as it is; line 0 means the whole file |
 
-### `problem_location()` + `problem_line()` - lines 1148-1160
+### `problem_location()` + `problem_line()` - lines 1176-1188
 Prints one problem as `ERROR: file:line: message`, or `ERROR: file: message` when it has no line.
 
 **If Operations asks:** "Every problem shows the file and line, like `grep -n`, so it can be found straight away. A problem with the whole file has no line to show."
 
-### `count_levels()` + `check_status()` - lines 1163-1180
+### `count_levels()` + `check_status()` - lines 1191-1208
 Counts warnings and errors; a check is `PASS`, or `FAIL (E errors, W warnings)`.
 
 **If Operations asks:** "A check with no problems is PASS. Anything else is FAIL with its counts, so you can see at a glance whether it blocks `--final` (errors) or is only worth a look (warnings)."
 
 **Why FAIL even with only warnings (user decision 2026-10-21 C-19 Q3):** the problems stay visible. So a `--final` run can show a FAIL line and still exit 0; only errors decide the exit code.
 
-### `InputError` + `read_markdown()` - lines 1183-1200
+### `InputError` + `read_markdown()` - lines 1211-1228
 Reads a file's text as it is on disk, minus an invisible start marker (BOM) if there is one; a file that isn't UTF-8 stops the run with an error naming it.
 
 **If Operations asks:** "Every Markdown file is read the same way. Windows line endings are kept, so the combined findings file copies each finding unchanged. An invisible start marker that some Windows editors add is dropped. If a file isn't plain UTF-8 text, the run stops and names the file."
@@ -581,7 +602,7 @@ Reads a file's text as it is on disk, minus an invisible start marker (BOM) if t
 
 **Limit:** a file saved in another encoding (e.g. Windows-1252) stops the run (exit code 2) instead of being guessed at.
 
-### `REPORT_FILE` + `check_report()` - lines 1203-1239
+### `REPORT_FILE` + `check_report()` - lines 1231-1267
 In `--final` only: checks `report.md` for leftover markers (errors) and older-style leftovers (warnings). Draft mode doesn't open it.
 
 **If Operations asks:** "`report.md` is put together by hand at the midpoint, so draft runs leave it alone. The final check looks for anything left unfilled in it, like a pasted draft banner. It only reads the file; it never changes it."
@@ -596,7 +617,7 @@ In `--final` only: checks `report.md` for leftover markers (errors) and older-st
 
 **Why the same scanners:** they're the two checks the QA checklist runs by hand on the report, with the same rules as for findings. Code blocks and code spans are skipped for older-style leftovers only; a marker inside a code block is still a leftover marker, so it's an error in `--final`.
 
-### `render_qa_report()` - lines 1242-1295
+### `render_qa_report()` - lines 1270-1323
 Writes `build/qa-report.txt`: the mode, one readiness line per finding, then PASS or FAIL for every check with its problems, then the `report.md` section in `--final`.
 
 **If Operations asks:** "It's the QA checklist's result for every file at once. Each finding says READY or why it's a draft, and each check says PASS or FAIL with the exact file and line of every problem."
@@ -638,24 +659,24 @@ PASS older-style leftovers
 
 **Limit:** problems are grouped by check, not by file. One finding's problems can be spread over several checks.
 
-### `check_finding()` - lines 1298-1343
+### `check_finding()` - lines 1326-1371
 Runs every check that looks at one finding on its own, and builds its summary row, its combined-file entry and its readiness line.
 
 **If Operations asks:** "This is where one finding goes through every per-finding check. The checks that compare files with each other (duplicate IDs, the index) run afterwards, once every finding is read."
 
-### `collect_qa()` - lines 1346-1391
-Reads every input and runs every check: each finding, then duplicate IDs and the index across all findings, then each timeline file, then `report.md` (`--final` only).
+### `collect_qa()` - lines 1374-1421
+Reads every input and runs every check: each finding, then duplicate IDs and the index across all findings, then each timeline file and any misplaced one, then `report.md` (`--final` only).
 
 **If Operations asks:** "It reads our findings and our teammates', the index and everyone's timeline files, and collects every problem by check. It only reads; writing comes next, in `write_outputs()`."
 
 **Why file names are shown relative to the root:** `findings/F-001-x.md` is the same on every tester's machine; the full path isn't.
 
-### `all_problems()` + `qa_summary_line()` - lines 1394-1412
+### `all_problems()` + `qa_summary_line()` - lines 1424-1442
 Lists every problem, `report.md`'s included, and writes the closing line, e.g. `QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 4 errors`.
 
 **If Operations asks:** "The last line sums up the run: how many findings, how many are READY, and how many warnings and errors there are in total."
 
-### `BUILD_FOLDER` + `OUTPUT_FILES` + `build_path()` - lines 1415-1441
+### `BUILD_FOLDER` + `OUTPUT_FILES` + `build_path()` - lines 1445-1471
 The four output files, and the check that each one is safe to write.
 
 **If Operations asks:** "Writing a file follows links. So before writing anything, every output path is checked: a link there could make the tool overwrite `report.md` or write into a teammate's `incoming/` folder. The tool creates `build/` itself, so a link only gets there if someone makes one by hand."
@@ -674,7 +695,7 @@ The four output files, and the check that each one is safe to write.
 
 **Why `st_nlink`:** it counts a file's names. A hard link to `report.md` has two, and writing one name would change the other. Folders always have more than one, so only files are checked.
 
-### `readiness_lines()` + `write_outputs()` - lines 1444-1491
+### `readiness_lines()` + `write_outputs()` - lines 1474-1521
 Writes the four `build/` files from scratch and returns the screen lines.
 
 **If Operations asks:** "Every run rewrites all four files completely, so nothing old is left in them. `report.md` is never written. Every output path is checked before the first write, so a refused run leaves `build/` exactly as it was."
@@ -701,7 +722,7 @@ QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 4 errors
 
 **Limit:** if the disk fills up halfway, the files already written stay written. The path checks only rule out a refused run changing anything.
 
-### `pandoc_hint()` - lines 1494-1507
+### `pandoc_hint()` - lines 1524-1537
 If pandoc is installed, a last line with the exact command to turn `report.md` into a Word file. The tool never runs it.
 
 **If Operations asks:** "pandoc converts Markdown to Word or PDF. If it's installed, we print the command so it can be copied. Our tool runs no commands at all, so it only shows it."
@@ -712,7 +733,7 @@ If pandoc is installed, a last line with the exact command to turn `report.md` i
 
 **Limit:** the hint shows even when `report.md` doesn't exist yet, and in draft mode.
 
-### `run()` - lines 1510-1536
+### `run()` - lines 1540-1566
 Does a whole compile and returns (exit code, QA report text, screen lines), printing nothing, so the notebook's Compile button can call it too.
 
 **If Operations asks:** "It runs every step in order: check the root, read and check everything, write the four files, add the pandoc hint. It doesn't print, so the notebook can show the same result in the browser."
@@ -725,7 +746,7 @@ Does a whole compile and returns (exit code, QA report text, screen lines), prin
 
 **Why 2 for a failure:** it's different from 1, so a script can tell "the report has problems" from "the tool couldn't run". Python's argparse also uses 2 for a bad option.
 
-### `main()` + `if __name__ == "__main__"` - lines 1539-1551
+### `main()` + `if __name__ == "__main__"` - lines 1569-1581
 Reads the options, runs, prints each line and exits with the code.
 
 **If Operations asks:** "This is what runs when you type `python3 tools/compile.py`. Importing the file (as the notebook does) runs nothing."
@@ -1003,7 +1024,16 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove the timeline reads exactly the three file types from everyone's notes, and nothing outside the working copy."
 
-#### `ParseTimelineEntryTests` - lines 1191-1266
+#### `incident_file()` + `MISPLACED` + `MisplacedTimelineFilesTests` - lines 1191-1255
+`incident_file()` gives a small `IR-` file with a valid time; `MISPLACED` is the message.
+- the Chunk 7 CR-3 probe (IR-001 at the root, IR-002 in `field-notes/`, IR-003 in `field-notes/alice/`): the timeline has only IR-003; two warnings name IR-001 and IR-002 and the exit is 0; with `--final` they are the only errors and the exit is 1
+- the same two spots inside `incoming/bob/` give one line each; `incoming/bob/field-notes/bob/` gives none
+- a person's folder, a deeper folder, `findings/`, `NOTE-` files, a `.txt` and a folder named like a file give no line
+- a file at the root linked outside the root is refused with its name
+
+**If Operations asks:** "These prove a timeline file in the wrong folder is reported instead of silently dropped, and that files in the right folder, or that aren't timeline files, give no extra lines."
+
+#### `ParseTimelineEntryTests` - lines 1258-1333
 - the real IR, SU and INJ templates give the exact type, time, summary and reference
 - an unfilled `[[IR_ID]]` stays in the summary as written
 - `09:05`, `around nine` and the untouched marker time each warn at their line
@@ -1012,7 +1042,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These run our real templates through the timeline reader, so a template change that breaks it fails the tests."
 
-#### `TIMELINE_GOLDEN` + `RenderTimelineTests` - lines 1269-1319
+#### `TIMELINE_GOLDEN` + `RenderTimelineTests` - lines 1336-1386
 - golden text: `09:05` before `10:00`, a 10:00 tie by reference, then the two bad times by reference; header plus one row per entry
 - no entries give the header only
 - a `|` in a Summary warns at its line and the row keeps the text
@@ -1020,7 +1050,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "This checks the exact order the timeline table will use."
 
-#### `combined_entry()` + `RenderCombinedFindingsTests` - lines 1322-1390
+#### `combined_entry()` + `RenderCombinedFindingsTests` - lines 1389-1457
 - golden text: High F-002 first, then the banner and Low F-001
 - headings are byte-identical; exactly one banner, right above the draft's heading
 - a finding with no severity word goes last; its banner says `no severity word`
@@ -1029,7 +1059,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove the combined file is our findings unchanged (only a missing final line break is added), in report order, with every draft marked."
 
-#### `whole_report()` + `no_problems()` + `QA_GOLDEN` + `RenderQaReportTests` - lines 1393-1525
+#### `whole_report()` + `no_problems()` + `QA_GOLDEN` + `RenderQaReportTests` - lines 1460-1592
 `whole_report()` puts fake findings through `compile.check_finding()` and the duplicate-ID check, then renders the QA report. `no_problems()` is a checks dict where every check ran and found nothing.
 - golden text: a complete finding is READY and every check, run for real, is PASS
 - the `--final` header is `any ERROR below fails the run`
@@ -1044,7 +1074,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove the QA report shows every check, gives each problem the right level for the mode, and points at the exact file and line."
 
-#### `CheckRequiredFieldsTests` - lines 1528-1562
+#### `CheckRequiredFieldsTests` - lines 1595-1629
 - the complete sample finding passes
 - an unfilled `[[SEVERITY_RATIONALE]]` fails "Why this severity", at line 5
 - two empty fields are each reported at their line
@@ -1053,7 +1083,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These prove an empty detail line is always reported, the same way READY counts it."
 
-#### `QaProblemShapeTests` - lines 1565-1617
+#### `QaProblemShapeTests` - lines 1632-1684
 One test per problem shape (C-19 carry-forward), each checking the exact printed line:
 - (file, line, message): a heading ID mismatch prints `file:1:`
 - (file, label, message): a missing labelled line, a missing Reproduction section and a missing timeline time print `file:` with no line
@@ -1062,7 +1092,7 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 
 **If Operations asks:** "Every kind of problem prints as file and line, so none of them can come out garbled."
 
-#### `CheckReportTests` - lines 1620-1692
+#### `CheckReportTests` - lines 1687-1759
 - a marker only in `report.md` is ignored in draft mode and is an ERROR in `--final`, with the exact `report.md:` section
 - draft mode never opens `report.md` (bytes that aren't UTF-8 would make any read fail)
 - an older-style `TODO` in `report.md` is only a WARNING
@@ -1073,7 +1103,7 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 
 **If Operations asks:** "These prove the final check reads the report, catches anything left unfilled in it, and never changes it."
 
-#### `WriteOutputsTests` - lines 1695-1898
+#### `WriteOutputsTests` - lines 1762-1965
 `setUp` builds a working copy with a complete finding, a teammate's draft, an index, a status update and a `report.md`.
 - the exact screen lines in draft mode and in `--final`, including the `report.md` status (`--final` only) and the QA line's counts
 - an absent `report.md` gives the NOT FOUND line
@@ -1089,7 +1119,7 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 
 **If Operations asks:** "These run the real tool on fake working copies and check every file it writes and every line it prints, and that it never writes anywhere it mustn't."
 
-#### `RunTests` - lines 1901-2021
+#### `RunTests` - lines 1968-2088
 - `run()` prints nothing and returns the exit code, the QA text (equal to `build/qa-report.txt`) and the lines
 - a marker gives exit 0 in draft mode and 1 in `--final`
 - `--final` with only warnings, or with `report.md` absent and nothing else wrong, gives 0
@@ -1100,20 +1130,20 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 
 **If Operations asks:** "These prove the exit codes the spec asks for, and that the tool only ever shows the pandoc command, never runs it."
 
-#### `MainTests` - lines 2024-2045
+#### `MainTests` - lines 2091-2112
 - `main()` prints exactly `run()`'s lines and returns its exit code (0 draft, 1 final)
 - `--help` exits 0
 
 **If Operations asks:** "This checks the command-line entry point prints the same thing `run()` returns."
 
-#### `ModuleSafetyTests` - lines 2048-2082
+#### `ModuleSafetyTests` - lines 2115-2149
 - importing a fresh copy of `compile.py` prints nothing
 - the only imported modules are `argparse`, `csv`, `re`, `shlex`, `shutil`, `sys` and `pathlib`: no `subprocess`, no `os`
 - no `subprocess`, `system`, `popen`, `Popen`, `exec` or `eval` appears anywhere in the code
 
 **If Operations asks:** "These read our own source code and prove it can't run commands, and that importing it does nothing."
 
-#### `CompleteRunTests` - lines 2085-2154
+#### `CompleteRunTests` - lines 2152-2221
 CTX-01. A whole event-shaped working copy, every part filled in: your own finding, a teammate's finding in `incoming/bob/`, an index listing both, one status update and a clean `report.md`.
 - `--final` returns 0. After the four WROTE lines come only `report.md checked: 0 problems` and `QA: 2 findings; 2 READY; 0 DRAFT; 0 warnings; 0 errors`, so there is no WARNING or ERROR line
 - the QA report has `PASS <name>` for every name in `QA_CHECKS`, in order, plus the two `report.md` checks. "required fields" (the rationale), "reproduction steps" (the indented `Expected:` lines) and "references" (the `https://` link) are among them
@@ -1123,7 +1153,7 @@ CTX-01. A whole event-shaped working copy, every part filled in: your own findin
 
 **If Operations asks:** "This is the spec's 'a correctly filled finding passes every check in `--final`', run end to end through the real tool on a fake working copy."
 
-#### `DoneMatrixTests` - lines 2157-2209
+#### `DoneMatrixTests` - lines 2224-2276
 CTX-02. The spec's Definition-of-done table, one row per case, each in a fresh fake working copy:
 
 | Case | Draft exit | `--final` exit | Finding | `--final` ERROR lines |
@@ -1137,12 +1167,50 @@ CTX-02. The spec's Definition-of-done table, one row per case, each in a fresh f
 
 **If Operations asks:** "This is the table from our definition of done, as one test: a draft never stops the tool, and `--final` blocks a leftover marker whether it's in a finding or in the report."
 
-#### `EVENT_F001` + `EVENT_F002` - lines 2212-2254
+#### Manual CLI check of the first row (V-02; not code, no line range)
+The tests call `compile.run()`; this checks the same thing through the real command line once, by hand. It repeats only the first `DoneMatrixTests` row (a marker in a finding), not the whole matrix.
+
+1. From the repo root, start `python3 -i` and paste this. It uses the test helpers, so the fake working copy lands in `tools/tests/.tmp/` and nothing outside the repo is touched:
+
+```
+import sys, unittest
+sys.path.insert(0, "tools/tests")
+import support
+case = unittest.TestCase()
+finding = support.make_complete_finding().replace("web01 (10.0.0.1), http", "[[HOST]] (10.0.0.1), http")
+index = "finding_id,title,severity,cvss_score,owner,status,in_report\nF-001,,,,,,\n"
+root = support.make_worktree(case, {"findings/F-001-default-admin-password.md": finding, "tracker/findings-index.csv": index})
+print(root)
+```
+
+2. Leave that session open. In a second terminal, also at the repo root, set `ROOT` to the printed path and run both modes:
+
+```
+ROOT=<the path printed in step 1>
+python3 tools/compile.py --root "$ROOT"; echo "exit: $?"
+python3 tools/compile.py --root "$ROOT" --final; echo "exit: $?"
+ls "$ROOT/build"
+```
+
+3. Back in the session, `case.doCleanups()` deletes the fake working copy; then `exit()`. `tools/tests/.tmp/` should be empty again.
+
+Recorded on 2026-10-22 with Python 3.9.6 (no `pandoc` installed, so no hint line; `<root>` stands for the printed path):
+
+| Run | Screen lines after the four `WROTE <root>/build/...` lines | Exit |
+|---|---|---|
+| draft | `WARNING: findings/F-001-default-admin-password.md:7: leftover marker [[HOST`, then `QA: 1 findings; 0 READY; 1 DRAFT; 1 warnings; 0 errors` | 0 |
+| `--final` | `ERROR: findings/F-001-default-admin-password.md:7: leftover marker [[HOST`, `report.md NOT FOUND: report not checked`, then `QA: 1 findings; 0 READY; 1 DRAFT; 0 warnings; 1 errors` | 1 |
+
+`build/` then held the four files: `findings-combined.md` (starting with the banner `[[NOTE: DRAFT: 1 unresolved markers, 0 missing fields]]`), `findings-summary.md` (one Critical row, Total 1), `interactions-timeline.md` (header only: no timeline files) and `qa-report.txt` (the DRAFT line and one FAIL, `leftover markers`). This matches the `DoneMatrixTests` row. For a practice run with your own files, use the example in `tools/README.md` instead.
+
+**If Operations asks:** "Besides the automated tests, we ran the real command once by hand on a fake folder and checked it gave the same results and exit codes."
+
+#### `EVENT_F001` + `EVENT_F002` - lines 2279-2321
 Findings A and B from the event-scenario note, copied exactly: a clean finding, and one with one real step followed by pasted output that starts with an IP address (`10.0.0.5 dc01 signing:false`). All names and addresses are fake.
 
 **If Operations asks:** "Two realistic fake findings from the practice scenario we used to review each chunk."
 
-#### `EventScenarioTests` - lines 2257-2370
+#### `EventScenarioTests` - lines 2324-2437
 CTX-03. One fake working copy holding the traps that already caused a review finding or a fix, one problem-causing trap per file. The files are written as bytes so the BOM and CRLF reach the disk exactly.
 
 | File | Trap | Expected |
@@ -1161,7 +1229,7 @@ CTX-03. One fake working copy holding the traps that already caused a review fin
 
 **If Operations asks:** "These are the real mistakes we expect on the day, like a file saved by Windows Notepad, Windows line endings, pasted command output and a lowercase severity. The test proves the tool handles each one the way we decided."
 
-#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 2373-2374
+#### Run-directly lines - test_support.py lines 82-83, test_compile.py lines 2440-2441
 Let one test file run on its own: `python3 tools/tests/test_compile.py`.
 
 **If Operations asks:** "So one test file can be run by itself. Normally we run them all with `python3 -m unittest discover tools/tests`."
@@ -1188,7 +1256,37 @@ The manual marker grep uses the same regex as the tool, `\[\[[A-Z_]+` (CR-1).
 
 **If Operations asks:** "The checklist's search and the tool's search are the same, so they always agree on what counts as a leftover placeholder."
 
-### `tools/BUILD-SPEC.md` Decisions log - lines 197-221
-Listed here because it isn't code, though it lives in `tools/`. A dated record of the decisions resolved up to 2026-10-15 (S-07). Later decisions, including the departures from the spec in Chunk 3 (CR-2 step format, CR-4 full CVSS vector) and Chunk 4 (C-15 Q2/Q3: READY also needs a severity word and a title; C-16 and C-17B: a `|` in Status or a timeline Summary warns; CR-3: the banner shows the readiness line; CR-4: an escaped `\|` doesn't warn) and Chunk 5 (C-19 Q1: timeline problems are errors in `--final`; C-19 Q2: the required-fields check covers all six fields; C-19 Q3: a warnings-only check shows FAIL; C-21: no links at `build/` or its output files), are in the `dev-tasks` DECISIONS section, which wins where the two differ (agents.md rule 6).
+### `checklists/50-report-qa.md` lines 6-7 (Chunk 7, D-08)
+"Run these from inside `~/cptc-work`" now comes first, because the compile command below it uses the relative path `tools/compile.py`. The compile line now says to run `--final` first, fix every `ERROR` (it exits 1 while any is left) and check every `WARNING`. It names what the tool covers (the finding files, the `IR-`/`SU-`/`INJ-` files, the findings index, and `report.md` for leftover markers and older-style leftovers only), says it never reads the exported file, mentions draft mode, and points to `tools/README.md`. The greps, the exported-file Ctrl-F and the PDF/DOCX checks are unchanged.
 
-**If Operations asks:** "The spec ends with a dated list of our early design decisions. Later ones, like requiring the full CVSS 3.1 vector where the spec only checks the prefix, are in our task list's decisions section, which wins where the two differ."
+**If Operations asks:** "The report QA list starts with our tool's strict check, says what the tool can't see, and keeps the manual searches for the exported PDF or Word file."
+
+### `tools/BUILD-SPEC.md` (Chunk 7, S-09)
+Listed here because it isn't code, though it lives in `tools/`. Wording only. The compile decisions from 2026-10-20 and 2026-10-21 are now written into the spec sections they change:
+- Constraint 4: C-21, no links at `build/` or its output files
+- Constraint 6: CP-01/CP-02, the size the user accepted at M2
+- Two modes: C-15 Q2/Q3 (READY also needs a severity word and a title), C-11 (has-text rule), Chunk 4 CR-3 (the banner shows the readiness line), C-19 Q1 (timeline problems are errors in `--final`), and the two kinds of problem that stay warnings
+- Outputs: C-16, C-17B and Chunk 4 CR-4 (pipe checks, with the double-backslash Limit), and C-19 Q3 (`FAIL (E errors, W warnings)`; the exit code depends only on errors)
+- Tool 1 QA: Chunk 3 CR-4 (full CVSS 3.1 vector), C-19 Q2 (required-fields check), C-12 (References check), Chunk 3 CR-2 (step format)
+- Deliverables: Chunk 3 CR-3, the `templates/finding.md` References NOTE
+
+The Decisions log (lines 198-242) gained one dated line per decision.
+
+Chunk 7 review: line 39 now says READY covers only leftover markers, the six required fields, the severity word and the title, and that every other check is reported separately (C7-01, Chunk 7 CR-1). The Outputs timeline line (line 62) names the misplaced-file problem, and the Decisions log gained the 2026-10-22 Chunk 7 CR-3 line (C-23). Deliverables (line 188) now lists the `templates/README.md` File names edit among the approved edits outside `tools/` (C7-02, Chunk 7 CR-3). The `dev-tasks` DECISIONS section still has the full entries and wins where the two differ (agents.md rule 6).
+
+**If Operations asks:** "Our design brief now describes the tool as built, including the decisions we made along the way, like requiring the full CVSS 3.1 vector where the first draft only checked the prefix. Each one is dated in its decisions log."
+
+### `tools/README.md` compile section - lines 40-278 (Chunk 7, D-01 and D-02)
+Listed here because it isn't code, though it lives in `tools/`. The plain-language guide for the report writer, replacing the "in progress" placeholder: why the tool exists, what it does NOT do, what it needs, how to run it, what it writes and prints, the exit codes, the 13 checks, the `report.md` limits, "one ID = one file", and a practice run. The practice run's output is real: it was captured from the README's own commands in a fake folder under `tools/tests/.tmp/`. The "What's here" table row for `compile.py` now says Built. Chunk 7 review: line 127 says what READY covers in the same words as the spec (C7-01), and the `interactions timeline` row of the checks table (line 143) names the misplaced-file problem (C-23).
+
+**If Operations asks:** "That's the walkthrough any of us can follow on the day. The example output in it is what the tool really printed, not something we typed."
+
+### `templates/README.md` File names - lines 46-47 (Chunk 7 review, C7-02)
+The incident report, note, status update and inject response names now start with `field-notes/<yourname>/` (Chunk 7 CR-3). The finding row and everything else are unchanged.
+
+**If Operations asks:** "The template guide now shows the folder as well as the file name, because the timeline only reads files inside a person's `field-notes/` folder."
+
+### `.github/workflows/tests.yml` - lines 1-42 (Chunk 7, S-10)
+CI: on every push and pull request, GitHub runs `python -m unittest discover tools/tests` on Ubuntu 24.04 with Python 3.9 and 3.13. It installs nothing, uses no secrets and deploys nothing; the job's token is read-only and isn't kept in the checkout. The runner is pinned because Python 3.9 builds exist for Ubuntu 22.04 and 24.04 but not 26.04. The actions are pinned to exact tags (`actions/checkout@v7.0.1`, `actions/setup-python@v7.0.0`). It hadn't run on GitHub yet when Chunk 7 was written; the first push is its first run.
+
+**If Operations asks:** "We develop on Macs, but the event runs Kali Linux with a newer Python. This runs our tests on Linux with the oldest and a newer Python every time we push, so a difference shows up before the event."

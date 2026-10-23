@@ -16,7 +16,7 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 | Path | What it is | Status |
 |---|---|---|
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
-| `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | **In progress:** the foundation is built (parsing findings, path safety, the findings index); the outputs, the QA checks and the command itself are not yet. Code walkthrough: `tools/compile-breakdown.md` |
+| `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21). Code walkthrough: `tools/compile-breakdown.md` |
 | `tools/notebook.py` | A local web page for notes, new files from the templates, logs and export | Planned (design: `tools/BUILD-SPEC.md`, Tool 2) |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
 | `tools/BUILD-SPEC.md` | The design brief both tools are built from | — |
@@ -37,35 +37,243 @@ scripts/logged-shell.sh <yourname>
 
 Full walkthrough, line by line: `scripts/logged-shell.md`.
 
-## Assembling the report: `tools/compile.py` (in progress)
+## Assembling the report: `tools/compile.py`
 
-**Not runnable yet:** only the foundation is built. This section describes the finished tool as specified in `tools/BUILD-SPEC.md` (Tool 1); it's updated as each part is built and reviewed. Until then, paste findings into `report.md` by hand, ordered by severity, and run `checklists/50-report-qa.md`.
+### Why it exists
 
-The report writer will run it from inside `~/cptc-work`:
+Everyone writes findings, incident reports, status updates and inject responses as Markdown files from the templates. The report writer has to turn them into one report. `compile.py` does the repetitive part, at any point in the event:
+
+- **Report-ready Markdown.** It builds the findings table and severity counts (report Section 3 and the Executive Summary), all findings in severity order (Section 5), and the interactions timeline (Section 7) from the `IR-`, `SU-` and `INJ-` files.
+- **QA status.** It runs some of the checks from the report QA list (`checklists/50-report-qa.md`) on the Markdown files, and marks each finding READY or DRAFT, so the report writer can see what is still unfinished and where: file and line, or just the file when there is no line to point at (e.g. a missing labelled line, which the message names).
+- **Two modes.** Draft mode (the default) only warns, because unfinished drafts are normal during the event. `--final` is the check before submitting: almost every QA problem becomes an error, and any error makes the run fail (exit code 1).
+
+It only works on the team's own files. It doesn't scan, attack or touch any target.
+
+### What it does NOT do
+
+- **It never edits `report.md`.** Draft mode doesn't open it. `--final` only reads it, to look for leftover markers and older-style leftovers such as `TODO`; fixes in the report are made by hand.
+- **It never changes the files it reads.** Findings, timeline files, the findings index and everything in `incoming/` are only read. The only things it writes are the four files in `build/` (it creates `build/` if needed).
+- **It never runs commands.** If `pandoc` is installed, it prints the command to convert `report.md`, and you run it yourself.
+- **It never uses the network.** It only reads and writes files on your own box.
+- **It doesn't fix anything.** It reports problems; people fix the files by hand.
+- **It doesn't check the exported PDF or DOCX.** Only the Markdown is checked, so the manual checks in `checklists/50-report-qa.md` (such as the Ctrl-F search of the exported file for `[[`, `XX` and `TODO`) still apply.
+
+### Before you run it
+
+- **Python 3.9 or newer, standard library only.** Nothing to install. Kali normally ships with Python 3, but check `python3 --version` on the event box (what's installed there is still **Unconfirmed**). The tests pass on Python 3.9 and 3.13.
+- **A working copy.** It works on `~/cptc-work` by default (`--root PATH` for another folder, e.g. a practice copy). It refuses a folder with `.git` directly inside it (a folder or a file), such as the git clone, before writing anything, so event data doesn't end up in the repo by mistake. It only looks in that one folder: a subfolder of the clone isn't caught.
+- **Files named and filled from the templates.** It reads `findings/F-*.md` and teammates' `incoming/*/findings/F-*.md`, the `IR-`, `SU-` and `INJ-` files in `field-notes/*/` and `incoming/*/field-notes/*/`, and `tracker/findings-index.csv` (or `--index PATH`). It reads them by the templates' headings and labelled lines (e.g. `- **Severity:**`), so keep those as the templates have them (file names: `templates/README.md` → File names).
+- **Everything stays inside the working copy.** A path that leads outside it, through `..` or a symlink, is refused and named in the error. `build/` and its four output files must be plain folders and files, not links.
+- **No notebook needed.** It works on hand-edited files on its own. If `tools/notebook.py` is built, its Compile button is planned to call the same code.
+
+### How to run it
+
+```
+python3 tools/compile.py [--root PATH] [--index PATH] [--final]
+```
+
+| Option | What it does |
+|---|---|
+| `--root PATH` | The working copy to compile. Default: `~/cptc-work` (never the current folder) |
+| `--index PATH` | The findings index. Default: `<root>/tracker/findings-index.csv`. A relative path is taken from the root, and the file must be inside the root |
+| `--final` | The strict check before submitting (below) |
+
+The report writer runs it from inside `~/cptc-work`:
 
 ```
 python3 tools/compile.py            # draft mode: any time during the event
 python3 tools/compile.py --final    # final 90 minutes, before every submission
 ```
 
-**What it will read:** `findings/F-*.md`, teammates' `incoming/*/findings/F-*.md`, the `IR-`, `SU-` and `INJ-` files under `field-notes/` and `incoming/*/field-notes/`, and `tracker/findings-index.csv` (or `--index PATH`).
+**Draft mode** (the default) reports every problem as a `WARNING`, writes all four files and exits 0 (unless it can't run at all: exit code 2, below), because drafts with `[[…]]` markers are normal during the event.
 
-**What it will write** (all to `build/`, regenerated from scratch every run; it never touches `report.md`):
+**`--final`** reports almost every problem as an `ERROR` and exits 1 if there is at least one. Two kinds stay warnings, because they can be legitimate: older-style leftovers (e.g. `TODO` in pasted output) and a findings index that is absent, empty or has only its header row (the ID comparison is then skipped).
 
-| File | Paste it into |
+### What it writes
+
+Four files in `build/` (it creates `build/` if needed). Every run rewrites all four from scratch; other files in `build/` are left alone. It refuses to run if `build/` or one of the four files is a link (a symlink, or a file with a second hard link), and it checks all four before writing any.
+
+| File | What's in it | Goes into the report |
+|---|---|---|
+| `build/findings-summary.md` | The findings table (ID, Title, Severity, Affected assets, Status), sorted Critical → Informational, findings with no severity word last, then by ID; and the severity count table with a Total | Section 3 and the Executive Summary counts |
+| `build/findings-combined.md` | Every finding's full text, in the same order. Each DRAFT is preceded by a banner line such as `[[NOTE: DRAFT: 2 unresolved markers, 1 missing fields]]`, which is itself a marker, so a banner pasted into `report.md` is caught by `--final` | Section 5 |
+| `build/interactions-timeline.md` | One row per `IR-`, `SU-` and `INJ-` file (Time, Type, Summary, Reference), sorted by time; a file whose time isn't `YYYY-MM-DD HH:MM` goes last | Section 7 |
+| `build/qa-report.txt` | Each finding's READY or DRAFT line, then every check as `PASS` or `FAIL (E errors, W warnings)` with its problems; in `--final`, a separate `report.md:` part | Nothing: it's for the team |
+
+Values go into the tables exactly as written; the tool never edits a finding to make it fit.
+
+### What it prints, and the exit code
+
+The screen shows, in this order:
+
+1. four `WROTE <full path>` lines, one per output file
+2. one line per problem: `WARNING: file:line: message` or `ERROR: file:line: message` (just `file:` when there is no line, e.g. a missing labelled line)
+3. `--final` only: `report.md checked: N problems` or `report.md NOT FOUND: report not checked`
+4. `QA: N findings; R READY; D DRAFT; W warnings; E errors`
+5. if `pandoc` is installed, a hint with the command to turn `report.md` into a DOCX (or PDF). The tool never runs it
+
+| Exit code | Meaning |
 |---|---|
-| `build/findings-summary.md` | Section 3 (the findings table) and the Executive Summary counts |
-| `build/findings-combined.md` | Section 5: all findings, in severity order. Paste each finding once, when it's READY (R18) |
-| `build/interactions-timeline.md` | Section 7: the timeline built from the `IR-`, `SU-` and `INJ-` files |
-| `build/qa-report.txt` | Nothing: it's the QA results, PASS/FAIL with file and line, and READY or DRAFT for each finding |
+| 0 | It ran. Always in draft mode; in `--final`, no errors (warnings are fine) |
+| 1 | `--final` found at least one error |
+| 2 | It couldn't run, in either mode: one `compile failed: <reason>` line instead (e.g. the root has `.git`, a path leads outside the root, a file can't be read or written) |
 
-**Draft mode** (the default) will warn but never fail: it always writes every file and exits 0, because drafts with `[[…]]` markers are normal during the event.
+A check can show `FAIL (0 errors, 1 warnings)` while `--final` still exits 0: only errors change the exit code.
 
-**`--final`** will check the Markdown report and every finding. Every QA problem becomes an error, and it exits 1 if anything fails. It also checks `report.md` for leftover markers if it's there, and prints `report.md NOT FOUND: report not checked` if it isn't. **Limit:** it can't read the exported PDF or DOCX, so the manual checks in `checklists/50-report-qa.md` still apply.
+The same work is available from Python without printing: `run(root, index, final)` in `compile.py` returns the exit code, the text of `qa-report.txt` and the screen lines. The tests use it, and the notebook's Compile button is planned to.
 
-**Safety (built):** it refuses a root folder that contains `.git` (the git clone), so `build/` and event data can't land in the public repo.
+### The checks
 
-**Practice runs and tests:** use a different folder with `--root`, for example `python3 tools/compile.py --root ~/cptc-practice`.
+READY means: no leftover markers, a value in each of the six required fields (Severity, CVSS 3.1, Why this severity, Affected assets, Status, References), a severity word (`Critical`, `High`, `Medium`, `Low` or `Informational`, spelled exactly) and a title. Anything else is DRAFT. READY covers only leftover markers, the six required fields, the severity word and the title. Every other check is reported separately as its own problem lines, so check those too before pasting.
+
+| Check | What it reports |
+|---|---|
+| finding headings | No `### F-NNN: Title` heading, a title at the wrong level (e.g. `##`), no title text, no ID, or a heading ID that differs from the filename's |
+| labelled lines | A missing labelled line such as `- **Severity:**`, or the same label twice |
+| severity | No severity word (the finding sorts last) |
+| required fields | One of the six required fields with nothing filled in |
+| leftover markers | `[[` followed by capital letters, e.g. `[[HOST]]` or an unclosed `[[HOST` |
+| older-style leftovers | `<<`, `TODO`, `F-XXX`, `IR-XXX`, `XX` (as a whole word), `YYYY` or `HH:MM`, outside code blocks and backtick spans. Always a warning |
+| reproduction steps | No `#### Reproduction steps` section, no numbered step (digits, a dot, then a space or tab, e.g. `1. `), or fewer `Expected:` lines than steps |
+| references | No `http` link on the `References:` line |
+| CVSS version | A vector that isn't a full CVSS 3.1 vector, with all eight metrics in the standard order |
+| duplicate finding IDs | The same ID in two files, in `findings/` or any `incoming/*/findings/` |
+| findings index | An ID missing from the index, an index ID with no finding file, or an index that can't be used |
+| summary table | A pipe character in a Title, Affected assets or Status value, which would break the table. A pipe written as backslash-pipe isn't reported. **Limit:** a pipe after two backslashes isn't reported either, though Markdown reads it as a real separator |
+| interactions timeline | A missing or badly formatted time, no `#` heading, or a pipe character in that heading (same backslash rule and Limit as the summary table). Also an `IR-`, `SU-` or `INJ-` file at the root's top level or the top of `field-notes/` (or those two spots inside `incoming/<owner>/`): it isn't in `field-notes/<name>/`, so it is left out of the timeline |
+
+How each check works, and its limits: `tools/compile-breakdown.md`.
+
+### `report.md` and its limits
+
+Draft mode never opens `report.md`. `--final` reads it, if it's in the root, for two checks only: leftover markers (errors) and older-style leftovers (warnings). Its problems are printed on screen and counted like the others, and listed under their own `report.md:` part of `qa-report.txt`. If it's missing, the run says `report.md NOT FOUND: report not checked`; that isn't an error, since the report may be finished in another tool.
+
+**Limits:** it doesn't run the finding checks on `report.md` (a finding pasted there is checked only for markers and older-style leftovers), and it can't read the exported PDF or DOCX. The manual checks in `checklists/50-report-qa.md` still apply.
+
+### One ID = one file
+
+Each finding ID lives in exactly one file, owned by the person who wrote it. If a teammate's finding needs a fix, the owner fixes their own file and sends it again (the next pull or export). The report writer doesn't keep a fixed copy in their own `findings/`: a copy there next to the original in `incoming/<name>/findings/` has the same ID, so the duplicate-ID check reports both files, an error in `--final`.
+
+### Example: a practice run
+
+This makes a throwaway practice copy, adds two clearly fake findings and a status update, and runs both modes. Run it on your own Kali VM, never in `~/cptc-work`.
+
+**1. Make the practice copy and add fake files.** Paste this whole block from inside your git clone. It copies the clone like the working-copy command at kickoff, but to `~/cptc-practice`. F-001 is finished; F-002 still has its CVSS markers and a `TODO`. If `~/cptc-practice` already exists (even as a broken symlink), it stops and changes nothing. It writes the fake files only after the copy, the `cd` and the `mkdir` all worked; if any of them fails, it prints `setup failed` and writes no fake files.
+
+```
+if [ -e ~/cptc-practice ] || [ -L ~/cptc-practice ]; then
+  echo "~/cptc-practice already exists: stop"
+elif cp -r "$PWD" ~/cptc-practice && rm -rf ~/cptc-practice/.git && cd ~/cptc-practice && mkdir -p findings tracker field-notes/alice incoming; then
+cat > findings/F-001-default-admin-password.md <<'EOF'
+### F-001: Default admin password on web01
+
+- **Severity:** Critical
+- **CVSS 3.1:** `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H` (9.8)
+- **Why this severity:** Anyone on the guest network can log in as admin with the vendor default password.
+- **Affected assets:** web01 (10.0.0.1)
+- **Status:** Exploited
+- **References:** CWE-1392, https://example.invalid/default-credentials
+
+#### Reproduction steps
+1. `curl -i -d 'user=admin&pass=admin' http://10.0.0.1/login`
+   Expected: HTTP/1.1 302 Found, redirecting to /admin
+EOF
+cat > findings/F-002-smb-signing.md <<'EOF'
+### F-002: SMB signing not required on file01
+
+- **Severity:** Medium
+- **CVSS 3.1:** `[[CVSS_VECTOR]]` ([[CVSS_SCORE]])
+- **Why this severity:** An attacker on the network can relay logins to file01. TODO check the other file servers.
+- **Affected assets:** file01 (10.0.0.2)
+- **Status:** Open
+- **References:** https://example.invalid/smb-signing
+
+#### Reproduction steps
+1. `nxc smb 10.0.0.2`
+   Expected: the output shows signing:False
+EOF
+cat > field-notes/alice/SU-midday.md <<'EOF'
+# Status update: midday
+
+- **Time:** 2026-11-07 12:00
+EOF
+cp templates/tracker/findings-index.csv tracker/
+echo 'F-001,Default admin password on web01,Critical,9.8,alice,Exploited,no' >> tracker/findings-index.csv
+echo 'F-002,SMB signing not required on file01,Medium,,alice,Open,no' >> tracker/findings-index.csv
+echo "practice copy ready: $PWD"
+else
+  echo "setup failed: remove ~/cptc-practice before trying again"
+fi
+```
+
+**2. Draft run.** Expected output on a box without `pandoc` (with `pandoc` installed, a `HINT:` line follows the `QA:` line). The `WROTE` paths here are for Kali's default `kali` account; yours show your own home folder:
+
+```
+$ python3 tools/compile.py --root ~/cptc-practice
+WROTE /home/kali/cptc-practice/build/findings-summary.md
+WROTE /home/kali/cptc-practice/build/interactions-timeline.md
+WROTE /home/kali/cptc-practice/build/findings-combined.md
+WROTE /home/kali/cptc-practice/build/qa-report.txt
+WARNING: findings/F-002-smb-signing.md:4: CVSS 3.1 has no value
+WARNING: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_VECTOR
+WARNING: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_SCORE
+WARNING: findings/F-002-smb-signing.md:5: older-style leftover TODO
+QA: 2 findings; 1 READY; 1 DRAFT; 4 warnings; 0 errors
+$ echo $?
+0
+```
+
+**3. Final run.** The same problems become errors, except the `TODO`; there is no `report.md` yet (same `pandoc` and path notes as step 2):
+
+```
+$ python3 tools/compile.py --root ~/cptc-practice --final
+WROTE /home/kali/cptc-practice/build/findings-summary.md
+WROTE /home/kali/cptc-practice/build/interactions-timeline.md
+WROTE /home/kali/cptc-practice/build/findings-combined.md
+WROTE /home/kali/cptc-practice/build/qa-report.txt
+ERROR: findings/F-002-smb-signing.md:4: CVSS 3.1 has no value
+ERROR: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_VECTOR
+ERROR: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_SCORE
+WARNING: findings/F-002-smb-signing.md:5: older-style leftover TODO
+report.md NOT FOUND: report not checked
+QA: 2 findings; 1 READY; 1 DRAFT; 1 warnings; 3 errors
+$ echo $?
+1
+```
+
+**4. The QA report** from that run, `cat build/qa-report.txt`:
+
+```
+QA report (--final): any ERROR below fails the run
+
+Findings:
+  findings/F-001-default-admin-password.md: READY
+  findings/F-002-smb-signing.md: DRAFT: 2 unresolved markers, 1 missing fields
+
+Checks:
+PASS finding headings
+PASS labelled lines
+PASS severity
+FAIL (1 errors, 0 warnings) required fields
+  ERROR: findings/F-002-smb-signing.md:4: CVSS 3.1 has no value
+FAIL (2 errors, 0 warnings) leftover markers
+  ERROR: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_VECTOR
+  ERROR: findings/F-002-smb-signing.md:4: leftover marker [[CVSS_SCORE
+FAIL (0 errors, 1 warnings) older-style leftovers
+  WARNING: findings/F-002-smb-signing.md:5: older-style leftover TODO
+PASS reproduction steps
+PASS references
+PASS CVSS version
+PASS duplicate finding IDs
+PASS findings index
+PASS summary table
+PASS interactions timeline
+
+report.md:
+report.md NOT FOUND: report not checked
+```
+
+**5. Clean up** when you're done: `cd ~ && rm -rf ~/cptc-practice`.
 
 How it works, function by function: `tools/compile-breakdown.md`.
 

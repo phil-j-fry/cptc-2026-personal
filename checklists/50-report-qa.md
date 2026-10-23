@@ -3,8 +3,8 @@
 > Run this on the **exported file** (PDF/DOCX) as well as the Markdown source. Whenever possible, the person running it should not be the one who wrote the section. Most items here come from criticisms CPTC10 judges made of finalist reports.
 
 ## 1. Leftovers (zero hits allowed)
-- [ ] If `tools/compile.py` is built, run `python3 tools/compile.py --final` first. It covers the Markdown files; the exported file and the manual items below still apply.
 - [ ] Run these from inside `~/cptc-work`.
+- [ ] Run `python3 tools/compile.py --final` first: fix every `ERROR` (it exits 1 while any is left) and check every `WARNING`. It runs its checks on the finding files (`findings/`, `incoming/*/findings/`), the `IR-`/`SU-`/`INJ-` files and the findings index (`tracker/findings-index.csv`, or `--index PATH`), but reads `report.md` only for leftover markers and older-style leftovers, and never reads the exported file, so the items below still apply. Earlier in the event, draft mode (`python3 tools/compile.py`, without `--final`) shows the same problems as warnings, without the `report.md` checks. Details: `tools/README.md`.
 - [ ] No template markers remain: `grep -rnE '\[\[[A-Z_]+' report.md findings/ incoming/*/findings/` returns nothing
 - [ ] Broad sweep: in `grep -rnF '[[' report.md findings/ incoming/*/findings/`, every hit must be real content in evidence (e.g. a bash `[[ -f x ]]` test), not a marker
 - [ ] Older-style leftovers: `grep -rnE '<<|TODO|F-XXX|IR-XXX|\bXX\b|YYYY|HH:MM' report.md findings/ incoming/*/findings/` returns nothing, apart from expected hits such as a `<<EOF` heredoc inside evidence. (`\bXX\b` skips "XXE".)
