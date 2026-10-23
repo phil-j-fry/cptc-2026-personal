@@ -6,7 +6,7 @@ The backlog for `compile.py`, `tools/notebook.py` and `scripts/`, and nothing el
 
 1. Write `scripts/pull.sh`: one script that pulls everyone's findings, evidence, notes and tracker files, with names and IPs filled in at kickoff (old TODO L70).
 2. `compile.py`: build the attack path from each finding's "Attack chain" line. The tracker CSV's `choke_point` mark needs a home.
-3. Build and review `compile.py` and `tools/notebook.py` line by line (old TODO L8–9).
+3. Build and review `compile.py` and `tools/notebook.py` function by function (old TODO L8–9).
 4. Half-page card on how to run `compile.py` (old TODO L63).
 5. Check `compile.py`'s size against the spec's guideline (old TODO L64).
 6. Decide whether `tools/notebook.py` gets its Checklists screen, and whether it shows them as must-do steps or suggestions (old TODO L85). Together with old TODO L83 (playbooks vs. technique checklists), this decides where `checklists/10`–`60` live.
@@ -22,7 +22,7 @@ The backlog for `compile.py`, `tools/notebook.py` and `scripts/`, and nothing el
     - **Large (not recommended):** Medium, plus start `sshd`, change the `kali` password, the zsh auto-start block, the network check (Drive TODO L69) and a clock check. Against: needs `sudo` and kickoff decisions; a half-way failure lands in the first 30 minutes; the zsh block is untested (item 9); the network check waits on the organizer's answers; every line must be explainable (R4).
     - Separate from `pull.sh` (item 1): that's the report writer collecting teammates' files all day; this runs once per person at kickoff.
     - When it exists: the team README, `checklists/00` and WORKFLOWS step 1 say "run it"; its how-to goes in `tools/README.md`, including a list of every file and folder it creates (e.g. `~/cptc-work/`, `field-notes/<name>/`, `incoming/`, and for Medium `tracker/`, `ot-hosts.txt` and the saved name), so the team can check it and explain it (R4).
-14. Finish `tools/README.md` as each tool is built and reviewed (Oct 19: first version written at the split cleanup). Fill the three headed stubs under "Still to write (build workflow)", which `tools/BUILD-SPEC.md` (Deliverables) requires: how each tool works, section by section; a manual test checklist; "Questions Operations might ask". Also switch the `compile.py` section from "in progress" / "will" to what it actually does once it runs, and the `notebook.py` section once it's built.
+14. Finish `tools/README.md` as each tool is built and reviewed (Oct 19: first version written at the split cleanup). `tools/BUILD-SPEC.md` (Deliverables) requires, for each tool, a walkthrough of how it works, a manual test checklist and "Questions Operations might ask". The `compile.py` parts are done (Chunks 7–8, Oct 22–23). The `notebook.py` parts remain (dev-tasks D-03 to D-05), including switching its section from "planned" to what it actually does once it's built.
 15. At C-15 (readiness): check whether anything uses `heading_markers` from `parse_finding_heading()` (`compile.py:248`). The whole-file leftover scan already counts the heading's markers, so if C-15 doesn't use it, remove it and its test assertions (Chunk 2 review, Oct 20).
 16. At C-15 (readiness): READY also requires `severity_value()` to find a level word. Today a Severity line with text but no level (`high`, `Hgh`) counts as filled, so the finding can be READY with a blank Severity cell. Make it DRAFT instead. This departs from the spec's "has text" rule, so it needs a DECISIONS entry (Chunk 2 review, Oct 20; user chose this over case-insensitive matching).
 

@@ -2,7 +2,7 @@
 
 Every block of `compile.py`, its test helpers, its tests, and the related edits outside `tools/`. The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code after the Chunk 7 review. Chunk 7's own tasks changed only docs, the report QA list and the CI workflow; its review added `misplaced_timeline_files()` and its tests (C-23, CT-23). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code after the Chunk 7 review. Chunk 7's own tasks changed only docs, the report QA list and the CI workflow; its review added `misplaced_timeline_files()` and its tests (C-23, CT-23). Chunk 8 changed only docs (`tools/README.md`, entry in section 4, and `TODO.md`), so no code or test range moved. The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 | Term | Meaning |
 |---|---|
@@ -1280,6 +1280,14 @@ Chunk 7 review: line 39 now says READY covers only leftover markers, the six req
 Listed here because it isn't code, though it lives in `tools/`. The plain-language guide for the report writer, replacing the "in progress" placeholder: why the tool exists, what it does NOT do, what it needs, how to run it, what it writes and prints, the exit codes, the 13 checks, the `report.md` limits, "one ID = one file", and a practice run. The practice run's output is real: it was captured from the README's own commands in a fake folder under `tools/tests/.tmp/`. The "What's here" table row for `compile.py` now says Built. Chunk 7 review: line 127 says what READY covers in the same words as the spec (C7-01), and the `interactions timeline` row of the checks table (line 143) names the misplaced-file problem (C-23).
 
 **If Operations asks:** "That's the walkthrough any of us can follow on the day. The example output in it is what the tool really printed, not something we typed."
+
+### `tools/README.md` manual checks and Operations questions - lines 299-351 (Chunk 8, D-04C and D-05C)
+Listed here because it isn't code, though it lives in `tools/`. Three parts:
+- **Heading (line 299):** "Still to write (build workflow)" is now "Walkthrough, manual checks and Operations questions", since two of its three parts are written. Its intro (line 301) says each tool's part is added once that tool is finished and reviewed. Nothing moved.
+- **Manual test checklist (lines 307-338, D-04C):** a `#### compile.py` part, so the notebook checks can go in a part of their own later. It starts from steps 1-3 of the practice run, then has 9 checks with the result to expect: `--help`, the `~/cptc-work` default root (run with `HOME` pointed at a missing folder, so a real `~/cptc-work` is never touched), the four outputs, `--final` passing with only warnings, a marker only in `report.md`, a timeline file outside `field-notes/<name>/` (C-23), `--index`, three refused paths (`..`, outside the root, a symlink out of `incoming/`) that leave `build/` unchanged, and the git-clone refusal. Every expected line and exit code was captured by running the real command on a fake practice copy under `tools/tests/.tmp/`, built from the README's own setup block.
+- **Questions Operations might ask (lines 340-351, D-05C):** a `#### compile.py` part with six short answers: where it came from (with the same Unconfirmed AI-assistance note as `scripts/logged-shell.md`), explaining how it works (reviewed function by function), targets and network, running commands, changing files (it never changes a file it reads; it writes only the four `build/` files), and what it checks and doesn't (only the checks in the README's checks table, mostly the labelled lines, reproduction steps, leftover placeholders, file names and IDs; it doesn't judge whether a finding is right or complete, such as the technical content, the CVSS score against the vector or the severity, or whether sections like Remediation are there; in `report.md`, only leftover markers and older-style leftovers; never the exported PDF or DOCX). They agree with the "If Operations asks" lines in this file.
+
+**If Operations asks:** "That's the list we work through by hand before the repo lock, with the output to expect, plus our short answers to your likely questions. Each expected result is what the tool really printed in a practice run."
 
 ### `templates/README.md` File names - lines 46-47 (Chunk 7 review, C7-02)
 The incident report, note, status update and inject response names now start with `field-notes/<yourname>/` (Chunk 7 CR-3). The finding row and everything else are unchanged.

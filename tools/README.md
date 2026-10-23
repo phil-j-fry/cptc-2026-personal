@@ -296,18 +296,56 @@ python3 tools/notebook.py --name <yourname>    # then open http://127.0.0.1:8765
 
 Never re-run the working-copy command. Copy just the changed file from a fresh clone: comp repo `README.md` → "Working copy and moving files on the day".
 
-## Still to write (build workflow)
+## Walkthrough, manual checks and Operations questions
 
-`tools/BUILD-SPEC.md` (Deliverables) asks this README to cover these too. They're added as each tool is finished and reviewed.
+`tools/BUILD-SPEC.md` (Deliverables) asks this README to cover these too. Each tool's part is added once that tool is finished and reviewed.
 
 ### How each tool works, section by section
 
-`compile.py`: see `tools/compile-breakdown.md` for now.
+`compile.py`: see `tools/compile-breakdown.md`.
 
 ### Manual test checklist
 
-To do.
+Checks a teammate runs by hand on their own Kali VM, never in `~/cptc-work`: after a tool change and before the repo lock. Each one says what to do and what you should see. The `/home/kali/` paths are for Kali's default account; yours show your own home folder.
+
+#### `compile.py`
+
+**Setup:** steps 1–3 of "Example: a practice run" above. Its steps 2 and 3 are the first two checks: the draft run has 4 warnings and exits 0, and `--final` has 3 errors and 1 warning and exits 1. Then work through the list below in order, from inside `~/cptc-practice` (item 9 runs from your git clone). After each run, `echo $?` shows the exit code. Item 4 fills in F-002's CVSS line, and the items after it expect that; any item that adds a file removes it again at its end. When you're done, clean up with step 5 of the example.
+
+1. **Options.** `python3 tools/compile.py --help`
+   You should see: the three options `--root`, `--index` and `--final`, and the default root `~/cptc-work`.
+2. **The default root is `~/cptc-work`, not the folder you're in.** `HOME="$PWD/manual-test-home" python3 tools/compile.py`
+   This points `~` at a folder that doesn't exist for this one run, so the run can't touch a real `~/cptc-work`. You should see: `compile failed: root folder not found: /home/kali/cptc-practice/manual-test-home/cptc-work`, exit 2.
+3. **The four outputs.** `ls build`, then open each file.
+   You should see: `findings-combined.md`, `findings-summary.md`, `interactions-timeline.md` and `qa-report.txt`.
+   - `findings-summary.md` lists F-001 (Critical) above F-002 (Medium), and its count row is `| 1 | 0 | 1 | 0 | 0 | 2 |`.
+   - `interactions-timeline.md` has one row: `| 2026-11-07 12:00 | Status update | Status update: midday | SU-midday |`.
+   - `findings-combined.md` has `[[NOTE: DRAFT: 2 unresolved markers, 1 missing fields]]` just above F-002's heading, and no banner above F-001.
+   - `qa-report.txt` matches step 4 of the example.
+4. **`--final` passes with only warnings left.** In `findings/F-002-smb-signing.md`, replace line 4 with ``- **CVSS 3.1:** `CVSS:3.1/AV:A/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N` (5.4)`` and leave the `TODO`. Run `python3 tools/compile.py --root ~/cptc-practice --final`.
+   You should see: `WARNING: findings/F-002-smb-signing.md:5: older-style leftover TODO`, `report.md NOT FOUND: report not checked`, `QA: 2 findings; 2 READY; 0 DRAFT; 1 warnings; 0 errors`, exit 0.
+5. **A marker only in `report.md`.** `printf '# Report\n\nTarget: [[HOST]]\n' > report.md`, then a draft run and a `--final` run.
+   You should see: the draft run shows no `report.md` line and no new problem (exit 0). `--final` adds `ERROR: report.md:3: leftover marker [[HOST` and `report.md checked: 1 problems`, exit 1. Then `rm report.md`.
+6. **A timeline file outside `field-notes/<name>/`.** `cp field-notes/alice/SU-midday.md field-notes/`, then a draft run and a `--final` run.
+   You should see: `WARNING: field-notes/SU-midday.md: not in field-notes/<name>/, so it is not in the timeline` in draft (exit 0); the same line as `ERROR` in `--final` (exit 1). `build/interactions-timeline.md` still has only the one row from `field-notes/alice/`. Then `rm field-notes/SU-midday.md`.
+7. **`--index`, taken from the root.** `head -n 2 tracker/findings-index.csv > tracker/short.csv` (the header and F-001 only), then `python3 tools/compile.py --root ~/cptc-practice --index tracker/short.csv`.
+   You should see: `WARNING: findings/F-002-smb-signing.md:1: F-002 is not in the findings index tracker/short.csv` (exit 0); with `--final` added, the same line as `ERROR` (exit 1). Then `rm tracker/short.csv`.
+8. **Paths that lead outside the root are refused.** Each run below prints one `compile failed:` line, exits 2 and leaves `build/` as it was (`ls -l --full-time build` shows the same times before and after):
+   - `python3 tools/compile.py --root ~/cptc-practice --index ../cptc-practice/tracker/findings-index.csv` gives `compile failed: path contains '..': ../cptc-practice/tracker/findings-index.csv`
+   - `python3 tools/compile.py --root ~/cptc-practice --index ~/findings-index.csv` gives `compile failed: path is outside the root: /home/kali/findings-index.csv -> /home/kali/findings-index.csv`
+   - `ln -s / incoming/mallory`, then `python3 tools/compile.py --root ~/cptc-practice`, gives `compile failed: path is outside the root: incoming/mallory -> /`. Then `rm incoming/mallory`.
+9. **The git clone is refused.** `cd` into your git clone and run `python3 tools/compile.py --root .`
+   You should see: `compile failed: this looks like the git clone (<your clone's full path> has .git); run on the working copy, e.g. ~/cptc-work`, exit 2. It doesn't create `build/` there: `ls build` finds no such folder, unless the clone already had one.
 
 ### Questions Operations might ask
 
-To do. `scripts/logged-shell.md` has its own.
+Short answers a teammate can give. `scripts/logged-shell.md` has its own.
+
+#### `compile.py`
+
+- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written for this team with AI assistance, from our own design brief, `tools/BUILD-SPEC.md`. It uses only Python's standard library, and it was reviewed function by function before it was accepted.
+- **"Can you explain how it works?"** It was written to be explainable (rule R4): small, plainly named functions, with comments that say why. It was reviewed function by function. `tools/compile-breakdown.md` covers each function with its line range, what it does, and a short answer for questions like these.
+- **"Does it touch any target, or send data anywhere?"** No. It imports no networking code. It only reads the team's own Markdown and CSV files inside the working copy (`~/cptc-work` by default), and the only files it writes are the four in `build/`.
+- **"Does it run commands?"** No. Nothing in it starts another program. If `pandoc` is installed, it prints the command to convert `report.md`; a person copies it and runs it.
+- **"Can it change a teammate's files, or ours?"** It never changes a file it reads: our findings, teammates' files in `incoming/<name>/` (rule R18), the index, the timeline files and `report.md`. The only files it writes are its own four outputs in `build/`, rewritten on every run that isn't refused. Before writing, it checks `build/` and each of its four files, so a link there can't redirect a write into `incoming/` or `report.md`.
+- **"What doesn't it check?"** It runs only the checks in "The checks" above: mostly each finding's labelled lines at the top, its reproduction steps, leftover placeholders, and the file names and IDs. It doesn't judge whether a finding is right or complete: not the technical content, not whether the CVSS score matches the vector or the severity, and not whether sections such as Remediation are there. In `report.md` (`--final` only) it looks only for leftover markers and older-style leftovers, and it can't read the exported PDF or DOCX, so the manual checks in `checklists/50-report-qa.md` still apply.
