@@ -1,0 +1,42 @@
+# Run the tools' unit tests on Linux for every push and pull request (S-10).
+# Why: the tests are written and run on macOS (Python 3.9.6, a filesystem
+# that ignores upper/lower case), but at the event the tools run on Kali
+# Linux with a newer Python. This checks both ends: the oldest Python we
+# support (3.9) and a recent one (3.13), on a case-sensitive filesystem.
+# The tests use the standard library only, so nothing is installed, no
+# secrets are used, and nothing is deployed.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+# The job only reads the code; it never writes to the repo.
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    # Pinned, not ubuntu-latest: Python 3.9 builds exist for Ubuntu 22.04
+    # and 24.04 but not 26.04, so ubuntu-latest moving on would drop 3.9.
+    runs-on: ubuntu-24.04
+    strategy:
+      # Run both versions to the end, so a failure on one doesn't hide
+      # the result on the other.
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+    steps:
+      # Actions are pinned to exact tags, so a new release can't change
+      # what the job runs without an edit here.
+      - uses: actions/checkout@v7.0.1
+        with:
+          # Don't leave the job's GitHub token in the checkout; the tests
+          # never need it.
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      # The test command from agents.md (Workflow step 2). It says python3;
+      # here setup-python makes "python" the matrix version.
+      - run: python -m unittest discover tools/tests
