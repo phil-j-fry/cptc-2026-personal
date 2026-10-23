@@ -1188,6 +1188,73 @@ class DiscoverTimelineFilesTests(unittest.TestCase):
         self.assertEqual(self.names(root), ["field-notes/alice/SU-x.md"])
 
 
+def incident_file(number):
+    """Return a small IR- file with a valid time, so it has no timeline problems."""
+    return "# Incident Report IR-" + number + "\n- **Time reported:** 2026-11-07 09:05\n"
+
+
+MISPLACED = "not in field-notes/<name>/, so it is not in the timeline"
+
+
+class MisplacedTimelineFilesTests(unittest.TestCase):
+    def test_probe_warns_in_draft_and_blocks_final(self):
+        # The Chunk 7 CR-3 probe: before C-23, only IR-003 reached the
+        # timeline and the other two were dropped with no problem line.
+        root = support.make_worktree(self, {
+            "IR-001-x.md": incident_file("001"),
+            "field-notes/IR-002-x.md": incident_file("002"),
+            "field-notes/alice/IR-003-x.md": incident_file("003"),
+        })
+        exit_code, qa_text, lines = compile.run(root, None, False)
+        timeline = (root / "build" / "interactions-timeline.md").read_text(encoding="utf-8")
+        self.assertIn("IR-003-x", timeline)
+        self.assertNotIn("IR-001", timeline)
+        self.assertNotIn("IR-002", timeline)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual([line for line in lines if MISPLACED in line], [
+            "WARNING: IR-001-x.md: " + MISPLACED,
+            "WARNING: field-notes/IR-002-x.md: " + MISPLACED,
+        ])
+        exit_code, qa_text, lines = compile.run(root, None, True)
+        self.assertEqual(exit_code, 1)
+        # These two are the only errors, so they alone make --final fail.
+        self.assertEqual([line for line in lines if line.startswith("ERROR:")], [
+            "ERROR: IR-001-x.md: " + MISPLACED,
+            "ERROR: field-notes/IR-002-x.md: " + MISPLACED,
+        ])
+
+    def test_same_two_spots_inside_each_incoming_owner(self):
+        root = support.make_worktree(self, {
+            "incoming/bob/SU-x.md": "# Status\n",
+            "incoming/bob/field-notes/INJ-y.md": "# Inject\n",
+            "incoming/bob/field-notes/bob/IR-004-z.md": incident_file("004"),
+        })
+        self.assertEqual(compile.misplaced_timeline_files(root), [
+            ("incoming/bob/SU-x.md", 0, MISPLACED),
+            ("incoming/bob/field-notes/INJ-y.md", 0, MISPLACED),
+        ])
+
+    def test_other_places_and_files_give_no_line(self):
+        root = support.make_worktree(self, {
+            "field-notes/alice/IR-001-x.md": incident_file("001"),
+            "field-notes/alice/old/IR-002-x.md": incident_file("002"),
+            "findings/IR-003-x.md": incident_file("003"),
+            "NOTE-recon.md": "# Recon\n",
+            "field-notes/NOTE-x.md": "# Note\n",
+            "IR-004.txt": "not markdown\n",
+            "IR-005-folder.md/inside.md": "a folder named like a file\n",
+        })
+        self.assertEqual(compile.misplaced_timeline_files(root), [])
+
+    def test_file_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"IR-009-x.md": incident_file("009")})
+        root = support.make_worktree(self)
+        (root / "IR-009-x.md").symlink_to(outside / "IR-009-x.md")
+        with self.assertRaises(compile.RootError) as caught:
+            compile.misplaced_timeline_files(root)
+        self.assertIn("IR-009-x.md", str(caught.exception))
+
+
 class ParseTimelineEntryTests(unittest.TestCase):
     def test_incident_report(self):
         text = filled_template("incident-report.md", {

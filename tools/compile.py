@@ -947,6 +947,34 @@ def discover_timeline_files(root):
     return sorted(files)
 
 
+def misplaced_timeline_files(root):
+    """Return a problem for each IR-, SU- or INJ- file in a likely wrong spot.
+
+    The spots are the root's top level and the top of field-notes/, and the
+    same two inside each incoming/<owner>/. A file saved there by hand is
+    left out of the timeline, and without this check nothing would say so
+    (DECISIONS 2026-10-22 Chunk 7 CR-3). No other folder is searched. Each
+    problem is (file_name, 0, message): line 0 means the whole file.
+    """
+    root = Path(root).resolve()
+    spots = [Path("."), Path("field-notes")]
+    for owner in child_folders(root, "incoming"):
+        spots += [owner, owner / "field-notes"]
+    names = []
+    for spot in spots:
+        if resolve_in_root(root, spot).is_dir():
+            for prefix in TIMELINE_TYPES:
+                for path in (root / spot).glob(prefix + "-*.md"):
+                    # Check where a file points before asking if it is a file,
+                    # as child_folders() does for folders.
+                    if resolve_in_root(root, spot / path.name).is_file():
+                        names.append((spot / path.name).as_posix())
+    problems = []
+    for name in sorted(names):
+        problems.append((name, 0, "not in field-notes/<name>/, so it is not in the timeline"))
+    return problems
+
+
 def parse_timeline_entry(file_name, text):
     """Return one timeline file's row data and its problems.
 
@@ -1386,6 +1414,8 @@ def collect_qa(root, index, final):
         timeline.append(entry)
         checks["interactions timeline"] += check_problems(
             "interactions timeline", entry["diagnostics"], final)
+    checks["interactions timeline"] += check_problems(
+        "interactions timeline", misplaced_timeline_files(root), final)
 
     return {"findings": findings, "timeline": timeline, "checks": checks,
             "report": check_report(root, final)}

@@ -43,8 +43,8 @@ Use these names rather than inventing new ones for the same thing.
 | File | Name |
 |---|---|
 | Finding | `findings/F-001-short-name.md` |
-| Incident report | `IR-001-short-name.md` |
-| Other event files (type prefix) | `NOTE-short-name.md`, `SU-short-name.md` (status update), `INJ-short-name.md` (inject response). The prefix says what the file is; it's never a `[[ ]]` tag, which QA would flag. `notebook.py` builds these names from a title and a type dropdown |
+| Incident report | `field-notes/<yourname>/IR-001-short-name.md` |
+| Other event files (type prefix) | `field-notes/<yourname>/NOTE-short-name.md`, `field-notes/<yourname>/SU-short-name.md` (status update), `field-notes/<yourname>/INJ-short-name.md` (inject response). The prefix says what the file is; it's never a `[[ ]]` tag, which QA would flag. `notebook.py` builds these names from a title and a type dropdown |
 | Evidence | `evidence/F-001-01.png`; Burp items `evidence/F-001-01-request.txt` (`checklists/40-evidence-and-logging.md`) |
 | Terminal logs | `~/cptc-logs/<name>_<UTC time>.log` and `.cmds.log` (`scripts/logged-shell.md`) |
 
