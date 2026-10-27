@@ -10,7 +10,7 @@ These are five CSV files that together give the team one shared picture of the e
 
 | File | One row per | Columns worth knowing |
 |---|---|---|
-| `hosts.csv` | Host | `stage`: `todo` → `enum` → `foothold` → `privesc` → `owned`, or `ot-do-not-touch` (also add those to `ot-hosts.txt`). `owner` is who is working it. |
+| `hosts.csv` | Host | `stage`: `todo` → `enum` → `foothold` → `privesc` → `owned`, or `ot-do-not-touch` (also add those to `exclude.txt` tagged `# OT`). `owner` is who is working it. |
 | `credentials.csv` | Credential | `source_finding` is where it came from. `tried_on` / `works_on` list hosts or services, so no one retries blindly or locks an account. In the report, redact `secret` to its first and last characters. |
 | `created-accounts-and-artifacts.csv` | Anything we added or changed on a system: accounts, files, services, config changes | `cleaned_up` = `yes` / `no`. This is the cleanup list and the source for report Appendix F. For files, put the SHA-256 in the `sha256` column. |
 | `attack-path.csv` | Edge in the attack path (`from` → `to`) | `choke_point` = `yes` when fixing that one finding breaks the path. This becomes the Attack Path diagram in the report. |

@@ -1,8 +1,8 @@
 # Tools and scripts: how to run them
 
-This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py` (planned) and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
+This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py` (planned), `scripts/make-workcopy.sh`, `scripts/pull.sh` and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
 
-**Before running anything, set up your working copy, `~/cptc-work`**: comp repo `README.md` → "Working copy and moving files on the day". Every command below runs from inside `~/cptc-work`, never from the git clone.
+**Before running anything, make your working copy, `~/cptc-work`,** with `scripts/make-workcopy.sh` (below; also comp repo `README.md` → "Working copy and moving files on the day"). Every other command below runs from inside `~/cptc-work`, never from the git clone.
 
 ## Rules for everything in `tools/` and `scripts/`
 
@@ -15,21 +15,86 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 
 | Path | What it is | Status |
 |---|---|---|
+| `scripts/make-workcopy.sh` | Makes your working copy `~/cptc-work` from the clone, once at kickoff. Needs `git` | Built |
+| `scripts/pull.sh` | The report writer's pull of every teammate's work into `incoming/<name>/`. Needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync` | Built |
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
 | `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21). Code walkthrough: `tools/compile-breakdown.md` |
 | `tools/notebook.py` | A local web page for notes, new files from the templates, logs and export | Planned (design: `tools/BUILD-SPEC.md`, Tool 2) |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
 | `tools/BUILD-SPEC.md` | The design brief both tools are built from | — |
 
+## Making your working copy: `scripts/make-workcopy.sh`
+
+Once per person at kickoff, before any logged shell. Run it from anywhere:
+
+```
+<repo-clone>/scripts/make-workcopy.sh <yourname> <repo-clone>
+```
+
+`<repo-clone>` is the clone on your box. A Git URL works as the second part too, if the box can reach it. `<yourname>` uses lowercase letters, digits and `-`, starting with a letter or digit (e.g. `alice`).
+
+**It copies only what is committed in that clone.** It runs `git clone`, so each file arrives at its last committed version: uncommitted edits and deletions, and files git doesn't track, are not carried over. Run `git status` in the clone first and commit or sort out anything it lists.
+
+What it does, in order:
+
+1. Refuses, changing nothing, if `~/cptc-work` already exists (a folder, a file or a symlink), if the name breaks the rule above, or if it doesn't get exactly two arguments.
+2. `git clone` of the source into `~/cptc-work`, then deletes `~/cptc-work/.git`, so nothing in the copy can be committed. The clone you copied from keeps its own `.git`.
+3. Creates `field-notes/<yourname>/`, `incoming/`, `tracker/` (a copy of `templates/tracker/`), an empty `exclude.txt` (the scans' skip list: SOW exclusions, OT hosts tagged `# OT`) and `.cptc-name` (your name on one line, which `logged-shell.sh` uses).
+
+It needs `git`, uses no `sudo` and doesn't touch anything outside `~/cptc-work`.
+
+**When it fails:**
+
+| It prints | What to do |
+|---|---|
+| `~/cptc-work already exists, so nothing was changed.` | You already have a working copy. For a tool fix, copy the one file (below). |
+| `git clone of <source> failed.` | Check the path or URL. Git usually removes what it started, but a clone that failed partway can leave a partial `~/cptc-work`: if it exists, `rm -rf ~/cptc-work` (nothing of yours is in it yet), then run the script again. |
+| `... ~/cptc-work is incomplete: delete it, then run this again.` | The clone worked but a later step didn't (e.g. the source has no `templates/tracker/`, or brings its own `tracker/`, `exclude.txt` or `.cptc-name`, or a symlink where the script writes). This happens in the same run, before any event work, so `rm -rf ~/cptc-work` and run it again (from the right source if that was the problem). The script never deletes it itself. |
+
+## Pulling teammates' work: `scripts/pull.sh`
+
+For the report writer, when the team moves files over SSH (option 2 in the comp repo `README.md` → "Getting files to the report writer"). Run it from inside `~/cptc-work`:
+
+```
+scripts/pull.sh --setup    # once at kickoff
+scripts/pull.sh            # pull every teammate
+scripts/pull.sh alice      # pull one teammate (the exact name from setup)
+```
+
+**Before setup,** each teammate changes the default `kali` password and starts their SSH server (`sudo systemctl start ssh`). Their box also needs `rsync`. The report writer's box needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync`. The script itself uses no `sudo`.
+
+**`--setup`** asks how many teammates, then each one's name, login and IP, once each. A name follows the same rule as `make-workcopy.sh`; a login is a lowercase Linux login (e.g. `kali`); an IP is four numbers separated by dots (e.g. `10.0.0.5`; whether each number is 255 or less isn't checked here, so a wrong address shows up when `ssh-copy-id` can't connect). An answer that breaks one of these formats stops setup and saves nothing, so start again. When every answer is fine, it:
+
+- saves the list to `~/cptc-work/teammates.txt` (one `name<TAB>login<TAB>IP` line per teammate, mode 600, owner-only permissions; it holds engagement IPs, and the repo's `.gitignore` lists it),
+- creates the pull key `~/.ssh/cptc_ed25519` (no passphrase) if it isn't there yet, or reuses it,
+- runs `ssh-copy-id` once per teammate, so each teammate's password is typed once, here. After that, pulls log in with the key.
+
+If the list already exists, `--setup` shows it first. Type `yes` to replace it: setup then asks for every teammate again. Anything else keeps the list: setup checks every line of it the way a pull does (a bad line is named by number, and nothing runs), then does the key step and one `ssh-copy-id` per teammate again, without retyping anyone. `ssh-copy-id` first checks whether a teammate already has the key and skips them if so, so normally only the teammates that failed are asked for a password.
+
+**Each pull** uses one `rsync` connection per teammate. It copies only `findings/`, `evidence/`, `field-notes/` and `tracker/` from the teammate's `~/cptc-work/` into `~/cptc-work/incoming/<name>/`. It deletes files there that the teammate has deleted, and anything in `incoming/<name>/` outside those four folders, so the folder matches what the teammate has now. It never writes on the teammate's box. Nobody edits anything in `incoming/` (rule R18).
+
+**When it fails:**
+
+| It prints | What to do |
+|---|---|
+| `no teammate list at ... Run setup first` | Run `scripts/pull.sh --setup`. |
+| `the key is not on: <names>` (setup) | Those teammates' SSH server isn't running, or the password was wrong. The others are done. Fix it and run `--setup` again, answering anything but `yes` to keep the list. |
+| `<name> failed.` and `not pulled: <names>` | That teammate's box is off, unreachable, or doesn't have the key. The others were still pulled; the script exits with an error so a partial pull is never silent. Pull them again later with `scripts/pull.sh <name>`. |
+| `no teammate named "<name>"` | Use the exact name from setup (`cat ~/cptc-work/teammates.txt`). |
+| `<path> is a symlink` | `incoming/` or `incoming/<name>/` is a link, so nothing is copied through it. Replace it with a plain folder. |
+| `... teammates.txt line N: ...` | The list was edited by hand and line N breaks a rule (or repeats a name). Fix that line, or run `--setup` again. |
+
+**After the event:** delete the pull key (`rm ~/.ssh/cptc_ed25519 ~/.ssh/cptc_ed25519.pub`) and `~/cptc-work/teammates.txt`. `ssh-copy-id` added the key's public line to each teammate's `~/.ssh/authorized_keys`; each teammate removes the line that matches `~/.ssh/cptc_ed25519.pub` (copy that file's text to them before deleting it). If setup created the key, that line ends in `cptc-pull`; a key that already existed keeps its own comment.
+
 ## Logging every terminal: `scripts/logged-shell.sh`
 
 Start it in every terminal, from inside `~/cptc-work`:
 
 ```
-scripts/logged-shell.sh <yourname>
+scripts/logged-shell.sh [yourname]
 ```
 
-- **Always give your name.** Without it, the logs are named after your login, and every competition Kali box may log in as `kali` (**Unconfirmed**; open question "Did every box log in as the same user?"), so nobody could tell whose log is whose.
+- **The name on the logs:** the name you give, which must use lowercase letters, digits and `-`, starting with a letter or digit (any other is refused and nothing is logged); without one, the name `make-workcopy.sh` saved in `~/cptc-work/.cptc-name`. If neither is there (or that file doesn't hold one valid name), it uses your login and prints a one-line warning, and logging still starts. Every competition Kali box may log in as `kali` (**Unconfirmed**; open question "Did every box log in as the same user?"), so logs named after the login can't be told apart: give your name, or make the working copy with the script.
 - **What it writes:** two files per session in `~/cptc-logs/`: `<name>_<UTC time>.log` (the full transcript) and `<name>_<UTC time>.cmds.log` (one line per command: time, exit code, directory, command). Type `exit` to stop; the file paths are printed.
 - **Every new terminal, automatically:** add the zsh auto-start block to `~/.zshrc` (`scripts/logged-shell.md` → "Optional: start logging automatically in every terminal"). It hasn't been tested in zsh yet; try it on your own Kali VM first.
 - **Windows box:** the script is Linux-only. Start a PowerShell transcript in every PowerShell window instead (`scripts/logged-shell.md` → "On the Windows box").
@@ -124,7 +189,7 @@ The same work is available from Python without printing: `run(root, index, final
 
 ### The checks
 
-READY means: no leftover markers, a value in each of the six required fields (Severity, CVSS 3.1, Why this severity, Affected assets, Status, References), a severity word (`Critical`, `High`, `Medium`, `Low` or `Informational`, spelled exactly) and a title. Anything else is DRAFT. READY covers only leftover markers, the six required fields, the severity word and the title. Every other check is reported separately as its own problem lines, so check those too before pasting.
+READY means: no leftover markers, a value in each of the six required fields (Severity, CVSS 3.1, Why this severity, Affected assets, Status, References), a severity word (`Critical`, `High`, `Medium`, `Low` or `Informational`, spelled exactly) and a title. Anything else is DRAFT. READY covers only leftover markers, the six required fields, the severity word and the title. Every other check is reported separately as its own problem lines. Paste a finding into `report.md` only when it is READY **and** has no problem lines of its own: a READY finding can still fail a check, e.g. the reproduction steps.
 
 | Check | What it reports |
 |---|---|
@@ -152,7 +217,7 @@ Draft mode never opens `report.md`. `--final` reads it, if it's in the root, for
 
 ### One ID = one file
 
-Each finding ID lives in exactly one file, owned by the person who wrote it. If a teammate's finding needs a fix, the owner fixes their own file and sends it again (the next pull or export). The report writer doesn't keep a fixed copy in their own `findings/`: a copy there next to the original in `incoming/<name>/findings/` has the same ID, so the duplicate-ID check reports both files, an error in `--final`.
+Each finding ID lives in exactly one file, owned by the person who wrote it. If a teammate's finding needs a fix, the owner fixes their own file and sends it again (the next pull or export). That holds after pasting too: a fix made in `report.md` (R18) must also be made in the author's own file, or the problem stays in their file and `compile.py` keeps reporting it; if it is an error, `--final` exits 1 on every run. The report writer doesn't keep a fixed copy in their own `findings/`: a copy there next to the original in `incoming/<name>/findings/` has the same ID, so the duplicate-ID check reports both files, an error in `--final`.
 
 ### Example: a practice run
 
@@ -294,7 +359,7 @@ python3 tools/notebook.py --name <yourname>    # then open http://127.0.0.1:8765
 
 ## Picking up a tool fix mid-event
 
-Never re-run the working-copy command. Copy just the changed file from a fresh clone: comp repo `README.md` → "Working copy and moving files on the day".
+`make-workcopy.sh` refuses to run again once `~/cptc-work` exists. Copy just the changed file from a fresh clone: comp repo `README.md` → "Working copy and moving files on the day".
 
 ## Walkthrough, manual checks and Operations questions
 

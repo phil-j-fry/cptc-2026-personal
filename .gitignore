@@ -8,6 +8,9 @@
 /build/
 /tracker/
 /report.md
+# pull.sh's teammate list (and its temp copy while setup writes it): engagement IPs
+/teammates.txt
+/.teammates.*
 /findings/*
 !/findings/.gitkeep
 /evidence/*
@@ -30,7 +33,7 @@ users.txt
 relay.txt
 asrep.txt
 kerb.txt
-ot-hosts.txt
+exclude.txt
 *.hashes
 *.ccache
 *.kirbi

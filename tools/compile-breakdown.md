@@ -1139,9 +1139,9 @@ One test per problem shape (C-19 carry-forward), each checking the exact printed
 #### `ModuleSafetyTests` - lines 2115-2149
 - importing a fresh copy of `compile.py` prints nothing
 - the only imported modules are `argparse`, `csv`, `re`, `shlex`, `shutil`, `sys` and `pathlib`: no `subprocess`, no `os`
-- no `subprocess`, `system`, `popen`, `Popen`, `exec` or `eval` appears anywhere in the code
+- none of `subprocess`, `system`, `popen`, `Popen`, `exec` or `eval` is used as a name or attribute in the parsed code
 
-**If Operations asks:** "These read our own source code and prove it can't run commands, and that importing it does nothing."
+**If Operations asks:** "These read our own source code and check that it imports only the listed modules and uses none of the banned names. That's a check, not a proof that it can't run commands. They also check that importing it prints nothing."
 
 #### `CompleteRunTests` - lines 2152-2221
 CTX-01. A whole event-shaped working copy, every part filled in: your own finding, a teammate's finding in `incoming/bob/`, an index listing both, one status update and a clean `report.md`.
