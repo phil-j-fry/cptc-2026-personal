@@ -923,9 +923,9 @@ class LoggedShellNameTests(ScriptTestCase):
                                  extra_env=env)
         self.assertEqual(result.returncode, 1)
         shown = name.decode("latin-1") if isinstance(name, bytes) else name
-        self.assertTrue(result.stderr.endswith(
-            'logged-shell: name "' + shown + '" is not allowed. Use lowercase letters, '
-            'digits and -, starting with a letter or digit.\n'), result.stderr)
+        # A line of its own: where the locale is missing, bash warns before AND after it.
+        self.assertIn('logged-shell: name "' + shown + '" is not allowed. Use lowercase letters, '
+                      'digits and -, starting with a letter or digit.', result.stderr.splitlines())
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.stub_calls(), [])
         self.assertFalse(self.logdir.exists())
