@@ -3,7 +3,7 @@
 The report is only as good as the evidence. Novices: **this sheet is your main job, and it's worth real points.**
 
 ## Team screenshot standard (decide before the event)
-- Terminal theme: [[PREP_TERMINAL_THEME]], font size: [[PREP_TERMINAL_FONT_SIZE]]. Everyone uses the same settings, so screenshots in the report look consistent and stay legible.
+- Terminal theme: the default on the competition Kali and Windows boxes, font size: the default (decided Oct 27). Everyone uses the same settings, so screenshots in the report look consistent and stay legible.
 
 ## Every session
 - [ ] Start `scripts/logged-shell.sh <yourname>`. Every command is captured with a timestamp in the prompt, and `*.cmds.log` gets one line per command (time, exit code, directory, command), which is the quick index for incident reports.
