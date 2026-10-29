@@ -1,6 +1,6 @@
 # Tools and scripts: how to run them
 
-This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py` (planned), `scripts/make-workcopy.sh`, `scripts/pull.sh` and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
+This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py` (built in part), `scripts/make-workcopy.sh`, `scripts/pull.sh` and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
 
 **Before running anything, make your working copy, `~/cptc-work`,** with `scripts/make-workcopy.sh` (below; also comp repo `README.md` → "Working copy and moving files on the day"). Every other command below runs from inside `~/cptc-work`, never from the git clone.
 
@@ -9,7 +9,7 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 - **Explain it or it doesn't go in (rule R4).** Every script or tool must be explainable line by line, written by us, standard library only, with no copied code we don't understand. The rulebook says teams "may be asked to demonstrate or explain their pre-written scripts or code during the event." (**Unconfirmed** whether AI-assisted code counts; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?")
 - **Short enough to explain.** Keep every script short enough that any team member can walk through it.
 - **No exploit code copied from elsewhere** without understanding it, and **no credentials or targets hard-coded**.
-- **Python 3 standard library only** for the tools: no `pip install`. The full design constraints are in `tools/BUILD-SPEC.md`.
+- **Python 3 standard library only** for the tools: no `pip install`.
 
 ## What's here
 
@@ -18,10 +18,11 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 | `scripts/make-workcopy.sh` | Makes your working copy `~/cptc-work` from the clone, once at kickoff. Needs `git` | Built |
 | `scripts/pull.sh` | The report writer's pull of every teammate's work into `incoming/<name>/`. Needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync` | Built |
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
-| `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21). Code walkthrough: `tools/compile-breakdown.md` |
-| `tools/notebook.py` | A local web page for notes, new files from the templates, logs and export | Planned (design: `tools/BUILD-SPEC.md`, Tool 2) |
+| `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21) |
+| `tools/notebook.py` | A local web page for the checklists, and later new files from the templates, logs and export | Built in part: checklists, and the list of your own files (not shown on the page yet) |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
-| `tools/BUILD-SPEC.md` | The design brief both tools are built from | — |
+
+Design docs and function-by-function walkthroughs are in the public app repo, https://github.com/phil-j-fry/cptc-2026-personal (`tools/`).
 
 ## Making your working copy: `scripts/make-workcopy.sh`
 
@@ -129,7 +130,7 @@ It only works on the team's own files. It doesn't scan, attack or touch any targ
 - **A working copy.** It works on `~/cptc-work` by default (`--root PATH` for another folder, e.g. a practice copy). It refuses a folder with `.git` directly inside it (a folder or a file), such as the git clone, before writing anything, so event data doesn't end up in the repo by mistake. It only looks in that one folder: a subfolder of the clone isn't caught.
 - **Files named and filled from the templates.** It reads `findings/F-*.md` and teammates' `incoming/*/findings/F-*.md`, the `IR-`, `SU-` and `INJ-` files in `field-notes/*/` and `incoming/*/field-notes/*/`, and `tracker/findings-index.csv` (or `--index PATH`). It reads them by the templates' headings and labelled lines (e.g. `- **Severity:**`), so keep those as the templates have them (file names: `templates/README.md` → File names).
 - **Everything stays inside the working copy.** A path that leads outside it, through `..` or a symlink, is refused and named in the error. `build/` and its four output files must be plain folders and files, not links.
-- **No notebook needed.** It works on hand-edited files on its own. If `tools/notebook.py` is built, its Compile button is planned to call the same code.
+- **No notebook needed.** It works on hand-edited files on its own. The notebook's Compile button, when it is built, is planned to call the same code.
 
 ### How to run it
 
@@ -206,8 +207,6 @@ READY means: no leftover markers, a value in each of the six required fields (Se
 | findings index | An ID missing from the index, an index ID with no finding file, or an index that can't be used |
 | summary table | A pipe character in a Title, Affected assets or Status value, which would break the table. A pipe written as backslash-pipe isn't reported. **Limit:** a pipe after two backslashes isn't reported either, though Markdown reads it as a real separator |
 | interactions timeline | A missing or badly formatted time, no `#` heading, or a pipe character in that heading (same backslash rule and Limit as the summary table). Also an `IR-`, `SU-` or `INJ-` file at the root's top level or the top of `field-notes/` (or those two spots inside `incoming/<owner>/`): it isn't in `field-notes/<name>/`, so it is left out of the timeline |
-
-How each check works, and its limits: `tools/compile-breakdown.md`.
 
 ### `report.md` and its limits
 
@@ -340,22 +339,30 @@ report.md NOT FOUND: report not checked
 
 **5. Clean up** when you're done: `cd ~ && rm -rf ~/cptc-practice`.
 
-How it works, function by function: `tools/compile-breakdown.md`.
+## Checklists in your browser: `tools/notebook.py` (built in part)
 
-## Notes, new files and export: `tools/notebook.py` (planned)
-
-Not built yet. The plan (`tools/BUILD-SPEC.md`, Tool 2):
+A page on your own box for the checklists, with more to come. Start it from inside `~/cptc-work`:
 
 ```
-python3 tools/notebook.py --name <yourname>    # then open http://127.0.0.1:8765
+python3 tools/notebook.py --name <yourname> [--root ~/cptc-work] [--port 8765]
 ```
 
-- **Local only:** a page on your own box, bound to `127.0.0.1`. It's not a server for the team.
-- **New file:** a finding (from `templates/finding.md`, or a `findings-library/` entry) in `findings/`; a note, incident report, status update or inject response (`NOTE-`, `IR-`, `SU-`, `INJ-`) in `field-notes/<yourname>/`. File names: `templates/README.md` → File names.
-- **Logs:** read-only view of `~/cptc-logs/`.
-- **Export:** one zip, `cptc-export-<name>-<timestamp>.zip`, laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would. This is option 3 in the comp repo `README.md` → "Getting files to the report writer".
+Then open the address it prints (`Notebook: http://127.0.0.1:8765` by default). Ctrl+C stops it.
 
-**Until it's built:** copy templates by hand (`cp templates/finding.md findings/F-NNN-short-name.md`), and make the handover archive with `zip -r`.
+- **Local only:** it listens on `127.0.0.1`, so only your own box can open it, and there is no option to change that. It's not a server for the team.
+- **`--name`:** your name as in `field-notes/<yourname>/` (`Alice Smith` becomes `alice-smith`).
+- **`--root`:** the working copy, `~/cptc-work` by default (never the folder you're in). Like `compile.py`, it refuses a folder with `.git` directly inside it, such as the git clone, and prints `notebook failed: ...`.
+- **`--port`:** 8765 by default. If that port is taken (e.g. by a second notebook), it prints `notebook failed: can't listen on 127.0.0.1:8765: ...`; choose another with `--port`.
+
+**What it does today:**
+
+- **Checklists:** lists the `.md` files in `checklists/` and shows each task line (`- [ ] ...`) as a checkbox; every other line is shown as it is in the file. Ticks are saved to `field-notes/<yourname>/checklist-state.json`; the checklist files are only read, never changed. Reworded tasks start unticked, since a tick belongs to the task's exact words.
+- **Your own files:** it already finds your own files, the `.md` files in `findings/` and `field-notes/<yourname>/`, sorted by name so each kind groups together, and sends them as data at `http://127.0.0.1:8765/files`. Teammates' copies in `incoming/` are never listed. The page doesn't show this list yet.
+- **Light / dark:** follows your system's setting; the button swaps it.
+
+**Still to come:** showing your own files on the page, and New file (a finding, from `templates/finding.md` or a `findings-library/` entry, in `findings/`; a note, incident report, status update or inject response in `field-notes/<yourname>/`; the notebook builds the file name, see `templates/README.md` → File names), a read-only view of `~/cptc-logs/`, and export (one zip, `cptc-export-<name>-<timestamp>.zip`, laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would: option 3 in the comp repo `README.md` → "Getting files to the report writer").
+
+**Until then:** copy templates by hand (`cp templates/finding.md findings/F-NNN-short-name.md`), and make the handover archive with `zip -r`.
 
 ## Picking up a tool fix mid-event
 
@@ -363,11 +370,11 @@ python3 tools/notebook.py --name <yourname>    # then open http://127.0.0.1:8765
 
 ## Walkthrough, manual checks and Operations questions
 
-`tools/BUILD-SPEC.md` (Deliverables) asks this README to cover these too. Each tool's part is added once that tool is finished and reviewed.
+Each tool's part is added once that tool is finished and reviewed.
 
 ### How each tool works, section by section
 
-`compile.py`: see `tools/compile-breakdown.md`.
+`compile.py`: "Assembling the report" above goes through it part by part: what it reads, what it writes, what it prints and each check.
 
 ### Manual test checklist
 
@@ -408,8 +415,8 @@ Short answers a teammate can give. `scripts/logged-shell.md` has its own.
 
 #### `compile.py`
 
-- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written for this team with AI assistance, from our own design brief, `tools/BUILD-SPEC.md`. It uses only Python's standard library, and it was reviewed function by function before it was accepted.
-- **"Can you explain how it works?"** It was written to be explainable (rule R4): small, plainly named functions, with comments that say why. It was reviewed function by function. `tools/compile-breakdown.md` covers each function with its line range, what it does, and a short answer for questions like these.
+- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written for this team with AI assistance, from our own design brief. It uses only Python's standard library, and it was reviewed function by function before it was accepted.
+- **"Can you explain how it works?"** It was written to be explainable (rule R4): small, plainly named functions, with comments that say why. It was reviewed function by function. The function-by-function walkthrough (each function's line range, what it does, and a short answer for questions like these) is in the public app repo; see the line under "What's here".
 - **"Does it touch any target, or send data anywhere?"** No. It imports no networking code. It only reads the team's own Markdown and CSV files inside the working copy (`~/cptc-work` by default), and the only files it writes are the four in `build/`.
 - **"Does it run commands?"** No. Nothing in it starts another program. If `pandoc` is installed, it prints the command to convert `report.md`; a person copies it and runs it.
 - **"Can it change a teammate's files, or ours?"** It never changes a file it reads: our findings, teammates' files in `incoming/<name>/` (rule R18), the index, the timeline files and `report.md`. The only files it writes are its own four outputs in `build/`, rewritten on every run that isn't refused. Before writing, it checks `build/` and each of its four files, so a link there can't redirect a write into `incoming/` or `report.md`.
