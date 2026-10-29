@@ -140,7 +140,7 @@ What the new shell gets:
 
 - **"Does this touch any target?"** No. It only records our own terminal to local files.
 - **"Does it send data anywhere?"** No. There's no network activity; both logs stay on the machine where it ran.
-- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written with AI assistance, and the team has reviewed it and can explain every line (see the walkthrough above). The design (per-command log with exit codes) follows PSUT's public CPTC repo idea, but none of their code is used.
+- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written with AI assistance, and the team has reviewed it and can explain every line (see the walkthrough above). The design (per-command log with exit codes) is based on public CPTC team material, but none of their code is used.
 - **"Why bash and not zsh?"** `PROMPT_COMMAND` and `history 1` are bash features, and one shell keeps it simple enough to explain.
 
 ## Handling the logs

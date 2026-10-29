@@ -1,6 +1,6 @@
 # Team Tracker
 
-These are five CSV files that together give the team one shared picture of the engagement. Open them in any text editor, or LibreOffice Calc if it's installed (**Unconfirmed** on the competition boxes; see the open question "What was on the competition boxes?"). The design follows what finalist teams built as web apps (PSUT's jVision, Tennessee Tech's R3CON), but uses plain files: we need the function, not another app to debug on the day.
+These are five CSV files that together give the team one shared picture of the engagement. Open them in any text editor, or LibreOffice Calc if it's installed (**Unconfirmed** on the competition boxes; see the open question "What was on the competition boxes?"). The design follows the shared-tracker web apps some finalist teams built, but uses plain files: we need the function, not another app to debug on the day.
 
 **Setup at kickoff:** copy this folder to `~/cptc-work/tracker/`. **The live copies never come back into this repo.** The repo is public, and these files will hold real credentials and client data.
 
