@@ -19,7 +19,7 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 | `scripts/pull.sh` | The report writer's pull of every teammate's work into `incoming/<name>/`. Needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync` | Built |
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
 | `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21) |
-| `tools/notebook.py` | A local web page for the checklists, and later new files from the templates, logs and export | Built in part: checklists, and the list of your own files (not shown on the page yet) |
+| `tools/notebook.py` | A local web page for the checklists, your own files and new files from the templates; later the fill-in view, logs and export | Built in part: checklists, the list of your own files, and New file |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
 
 Design docs and function-by-function walkthroughs are in the public app repo, https://github.com/phil-j-fry/cptc-2026-personal (`tools/`).
@@ -339,9 +339,9 @@ report.md NOT FOUND: report not checked
 
 **5. Clean up** when you're done: `cd ~ && rm -rf ~/cptc-practice`.
 
-## Checklists in your browser: `tools/notebook.py` (built in part)
+## Checklists and your files in your browser: `tools/notebook.py` (built in part)
 
-A page on your own box for the checklists, with more to come. Start it from inside `~/cptc-work`:
+A page on your own box for the checklists, your own files and new files, with more to come. Start it from inside `~/cptc-work`:
 
 ```
 python3 tools/notebook.py --name <yourname> [--root ~/cptc-work] [--port 8765]
@@ -357,12 +357,13 @@ Then open the address it prints (`Notebook: http://127.0.0.1:8765` by default). 
 **What it does today:**
 
 - **Checklists:** lists the `.md` files in `checklists/` and shows each task line (`- [ ] ...`) as a checkbox; every other line is shown as it is in the file. Ticks are saved to `field-notes/<yourname>/checklist-state.json`; the checklist files are only read, never changed. Reworded tasks start unticked, since a tick belongs to the task's exact words.
-- **Your own files:** it already finds your own files, the `.md` files in `findings/` and `field-notes/<yourname>/`, sorted by name so each kind groups together, and sends them as data at `http://127.0.0.1:8765/files`. Teammates' copies in `incoming/` are never listed. The page doesn't show this list yet.
+- **Your own files:** the left column lists the `.md` files in `findings/` and `field-notes/<yourname>/`, sorted by name so each kind groups by prefix (`F-`, `INJ-`, `IR-`, `NOTE-`, `SU-`). Teammates' copies in `incoming/` are never listed. A folder or file whose link points outside the working copy isn't listed; the column shows `Not listed:` and the reason instead.
+- **New file:** pick a type (Note, Incident report, Status update, Inject response or Finding) and type a title; there is no file name to type. The notebook builds the name and folder (`templates/README.md` → File names): a Finding goes in `findings/`, the others in `field-notes/<yourname>/`, and each starts from its template in `templates/` (a Note starts blank). An incident report and a finding also need a three-digit number. For an incident report the form suggests the next free one (the highest IR number in use plus one). A number already in use (`IR-NNN` or `F-NNN`) gives a warning, but the file is still made. A Finding can start from a `findings-library/` entry instead of the template; picking one puts its title in the Title box. The title must be one line. An existing file is never overwritten: if the name is taken, it says `already exists, choose a different title: <path>`. The new file then shows, selected, in the left column.
 - **Light / dark:** follows your system's setting; the button swaps it.
 
-**Still to come:** showing your own files on the page, and New file (a finding, from `templates/finding.md` or a `findings-library/` entry, in `findings/`; a note, incident report, status update or inject response in `field-notes/<yourname>/`; the notebook builds the file name, see `templates/README.md` → File names), a read-only view of `~/cptc-logs/`, and export (one zip, `cptc-export-<name>-<timestamp>.zip`, laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would: option 3 in the comp repo `README.md` → "Getting files to the report writer").
+**Still to come:** a fill-in view for opening and filling in your files, a read-only view of `~/cptc-logs/`, a compile button, and export (one zip, `cptc-export-<name>-<timestamp>.zip`, laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would: option 3 in the comp repo `README.md` → "Getting files to the report writer").
 
-**Until then:** copy templates by hand (`cp templates/finding.md findings/F-NNN-short-name.md`), and make the handover archive with `zip -r`.
+**Until then:** fill your files in with a text editor, run `compile.py` from the terminal, and make the handover archive with `zip -r`.
 
 ## Picking up a tool fix mid-event
 
