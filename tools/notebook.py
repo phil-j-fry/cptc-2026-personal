@@ -551,6 +551,586 @@ def save_tick(handler):
     send_json(handler, 200, {"key": key, "checked": checked})
 
 
+# The New file table (BUILD-SPEC Tool 2, New file). The keys are the exact
+# labels the New form shows.
+# "path" is filled in later with str.format(): {name} is the slugged --name,
+# {nnn} the checked three-digit number and {slug} the slugged title. The
+# folders are written here, never taken from a request, so a new file can
+# only go in field-notes/<name>/ or findings/.
+# "template" is the file it starts from, relative to the root; None means a
+# blank file. "library" is True only for a Finding, which may start from a
+# findings-library/ entry instead.
+NEW_FILE_TYPES = {
+    "Note": {
+        "path": "field-notes/{name}/NOTE-{slug}.md",
+        "needs_nnn": False,
+        "template": None,
+        "library": False,
+    },
+    "Incident report": {
+        "path": "field-notes/{name}/IR-{nnn}-{slug}.md",
+        "needs_nnn": True,
+        "template": "templates/incident-report.md",
+        "library": False,
+    },
+    "Status update": {
+        "path": "field-notes/{name}/SU-{slug}.md",
+        "needs_nnn": False,
+        "template": "templates/status-update.md",
+        "library": False,
+    },
+    "Inject response": {
+        "path": "field-notes/{name}/INJ-{slug}.md",
+        "needs_nnn": False,
+        "template": "templates/inject-response.md",
+        "library": False,
+    },
+    "Finding": {
+        "path": "findings/F-{nnn}-{slug}.md",
+        "needs_nnn": True,
+        "template": "templates/finding.md",
+        "library": True,
+    },
+}
+
+
+def new_file_type(type_name):
+    """Return the New file table's entry for type_name, e.g. "Incident report".
+
+    Raises ValueError for anything else, near misses such as "note" or
+    " Note" included: only the form's exact labels are types.
+    """
+    # The isinstance check first: a list from a JSON body would make the
+    # "in" test raise TypeError instead of this readable error.
+    if not isinstance(type_name, str) or type_name not in NEW_FILE_TYPES:
+        raise ValueError("unknown file type: " + repr(type_name)
+                         + " (use one of: " + ", ".join(NEW_FILE_TYPES) + ")")
+    # A copy, so a caller that changes it can't change the table.
+    return dict(NEW_FILE_TYPES[type_name])
+
+
+# The findings library: ready-written findings a new Finding can start from.
+LIBRARY_DIR = "findings-library"
+# Every library entry's first heading starts with this; the rest of that
+# line is the entry's title (OQ-03).
+LIBRARY_HEADING = "### [[FINDING_ID]]: "
+# A Markdown heading: one or more "#", then a space or tab. "#1 priority"
+# is prose, not a heading.
+HEADING_LINE_RE = re.compile(r"#+[ \t]")
+
+
+def library_paths(root):
+    """Return the names directly in findings-library/ ending .md, as root-relative paths, sorted.
+
+    Never its README.md; an empty list if the folder is missing. A name may
+    still be a folder or a link: each is path-checked before it is read.
+    Raises compile.RootError if findings-library/ is a symlink pointing
+    outside the root.
+    """
+    # Checked before listing, so a linked folder outside the root is never
+    # looked into: even its file names stay hidden.
+    folder = readable_path(root, LIBRARY_DIR)
+    # glob("*.md") doesn't look in subfolders. No is_file() here: it follows
+    # a link, which must wait until the link has passed the path check.
+    # Sorted, because glob's order depends on the disk.
+    return sorted(LIBRARY_DIR + "/" + path.name for path in folder.glob("*.md")
+                  if path.name != "README.md")
+
+
+def read_library_entry(root, path):
+    """Return one library entry's text as it is on disk now.
+
+    Raises compile.RootError if path is refused or isn't a library entry,
+    and compile.InputError if the file isn't UTF-8 text.
+    """
+    # The shared path check first (OQ-13): `..`, an absolute path outside the
+    # root, a NUL byte and a symlink pointing outside are refused, path named.
+    resolved = readable_path(root, path)
+    # Then only what the list shows, so this reads library entries and
+    # nothing else in the working copy. is_file() runs after the path check,
+    # and leaves out a folder named like "x.md".
+    if path not in library_paths(root) or not resolved.is_file():
+        raise compile.RootError("not a findings-library entry: " + str(path))
+    return compile.read_markdown(resolved)
+
+
+def without_cr(line):
+    """Return line without a final "\r", left by a Windows line ending."""
+    return line[:-1] if line.endswith("\r") else line
+
+
+def library_heading_index(path, lines):
+    """Return the index of the entry's first heading in lines (the text split on "\n").
+
+    Raises ValueError, naming path, if there is no heading or the first
+    one doesn't start with "### [[FINDING_ID]]: ".
+    """
+    for index, line in enumerate(lines):
+        line = without_cr(line)
+        if not HEADING_LINE_RE.match(line):
+            continue
+        # Only the first heading counts; a later one is part of the entry.
+        if not line.startswith(LIBRARY_HEADING):
+            raise ValueError(path + ": first heading doesn't start with "
+                             + repr(LIBRARY_HEADING) + ": " + repr(line))
+        return index
+    raise ValueError(path + ": no heading; a library entry starts with "
+                     + repr(LIBRARY_HEADING + "<title>"))
+
+
+def library_title(path, text):
+    """Return the text after "### [[FINDING_ID]]: " on the entry's first heading.
+
+    The title is returned exactly as written. Raises ValueError, naming
+    path, if there is no heading or the first one doesn't start that way.
+    """
+    # Split on "\n" only, and drop a "\r", so a Windows line ending never
+    # ends up in the title.
+    lines = text.split("\n")
+    heading = without_cr(lines[library_heading_index(path, lines)])
+    return heading[len(LIBRARY_HEADING):]
+
+
+def list_library(root):
+    """Return (entries, refused) for the New form's library dropdown.
+
+    entries: {"path", "title"} for each library entry, sorted by path.
+    refused: one message per entry that can't be offered (a link pointing
+    outside the root, not UTF-8, or the wrong first heading); the rest is
+    still listed. If findings-library/ itself links outside the root, that
+    is the one refusal and nothing is listed.
+    """
+    entries = []
+    refused = []
+    try:
+        paths = library_paths(root)
+    except compile.RootError as error:
+        # Reported like any other bad link, so the New form still opens for
+        # every other type (DECISIONS 2026-10-29 Chunk N3 D1).
+        return entries, [str(error)]
+    for path in paths:
+        try:
+            # Path check first; is_file() follows a link, so only after it.
+            # A folder named like "x.md" isn't an entry, so it is skipped.
+            if not readable_path(root, path).is_file():
+                continue
+            title = library_title(path, read_library_entry(root, path))
+        except (compile.RootError, compile.InputError, ValueError, OSError) as error:
+            # One bad entry must not hide the others mid-event (as the
+            # own-file list, Chunk N2 D3); its reason is shown instead.
+            refused.append(str(error))
+            continue
+        entries.append({"path": path, "title": title})
+    refused.sort()
+    return entries, refused
+
+
+def checked_folder(root, folder, refused):
+    """Return True if folder (root-relative) is a folder inside the root.
+
+    A link pointing outside the root is added to refused, with its reason,
+    and gives False, so the caller carries on with everything else.
+    """
+    try:
+        # The path check first; is_dir() follows a link, so only after it.
+        return readable_path(root, folder).is_dir()
+    except compile.RootError as error:
+        refused.append(str(error))
+        return False
+
+
+def subfolders(root, folder, refused):
+    """Return folder/<name> for each folder directly inside folder, sorted.
+
+    folder must already have passed the path check. A link pointing outside
+    the root is added to refused instead.
+    """
+    names = sorted(entry.name for entry in readable_path(root, folder).iterdir())
+    return [folder + "/" + name for name in names
+            if checked_folder(root, folder + "/" + name, refused)]
+
+
+def matching_files(root, folder, name_re, refused):
+    """Return (path, match) for each .md file directly in folder whose name matches name_re.
+
+    Sorted by path. A file link pointing outside the root is added to
+    refused instead; a folder named like "x.md" is skipped.
+    """
+    found = []
+    for entry in readable_path(root, folder).glob("*.md"):
+        match = name_re.match(entry.name)
+        if not match:
+            continue
+        path = folder + "/" + entry.name
+        try:
+            # The path check first; is_file() follows a link, so only after it.
+            if readable_path(root, path).is_file():
+                found.append((path, match))
+        except compile.RootError as error:
+            refused.append(str(error))
+    return sorted(found, key=lambda item: item[0])
+
+
+def finding_id_folders(root, refused):
+    """Return the folders that hold findings: findings/ and incoming/<owner>/findings/.
+
+    The same two places compile.py reads (Tool 1 Inputs). A link pointing
+    outside the root, at any level, is added to refused; the rest is still
+    scanned (DECISIONS 2026-10-29 Chunk N3 D1). A missing folder adds nothing.
+    """
+    folders = []
+    if checked_folder(root, "findings", refused):
+        folders.append("findings")
+    if checked_folder(root, "incoming", refused):
+        for owner in subfolders(root, "incoming", refused):
+            if checked_folder(root, owner + "/findings", refused):
+                folders.append(owner + "/findings")
+    return folders
+
+
+def ir_folders(root, refused):
+    """Return the folders that hold IR files: field-notes/<name>/ and incoming/<owner>/field-notes/<name>/.
+
+    The same places compile.py reads for the timeline, for every person, so
+    no name is built in. A link pointing outside the root, at any level, is
+    added to refused; the rest is still scanned (DECISIONS 2026-10-29
+    Chunk N3 D1).
+    """
+    folders = []
+    if checked_folder(root, "field-notes", refused):
+        folders += subfolders(root, "field-notes", refused)
+    if checked_folder(root, "incoming", refused):
+        for owner in subfolders(root, "incoming", refused):
+            if checked_folder(root, owner + "/field-notes", refused):
+                folders += subfolders(root, owner + "/field-notes", refused)
+    return folders
+
+
+def finding_id_warnings(root, nnn):
+    """Return (warnings, refused) for a new finding numbered nnn.
+
+    warnings: one line per existing finding file with ID F-<nnn>, in
+    findings/ or any incoming/<owner>/findings/, e.g.
+    "F-007 already exists: findings/F-007-old.md". Only a warning: the user
+    decides (the ID allocation rule R6 is the team's, not the tool's).
+    refused: one message per link pointing outside the root; the rest is
+    still checked. Raises ValueError if nnn isn't three digits.
+    """
+    finding_id = "F-" + validate_nnn(nnn)
+    warnings = []
+    refused = []
+    for folder in finding_id_folders(root, refused):
+        # compile.py's own file-name rule, so the notebook warns about the
+        # same IDs compile's duplicate check will report (F-007-x.md and
+        # F-007.md, but not F-0070 or F-007x).
+        for path, match in matching_files(root, folder, compile.FILENAME_ID_RE, refused):
+            if match.group(0) == finding_id:
+                warnings.append(finding_id + " already exists: " + path)
+    # Sorted, because a refused file link is found in glob's order,
+    # which depends on the disk.
+    refused.sort()
+    return warnings, refused
+
+
+# An IR file's number: "IR-", exactly three ASCII digits, then a non-word
+# character, e.g. IR-004-x.md or IR-004.md, but not IR-0040 or IR-004x.
+IR_NUMBER_RE = re.compile(r"IR-([0-9]{3})\b")
+NO_IR_NUMBER_LEFT = ("IR-999 is in use, so there is no next three-digit IR number"
+                     " to suggest: type one in.")
+
+
+def suggest_ir_number(root):
+    """Return (suggestion, refused): the highest IR number in use plus one, e.g. "005".
+
+    "001" if there is no IR file yet. None if IR-999 is in use: then there
+    is no three-digit number left to suggest (show NO_IR_NUMBER_LEFT).
+    The suggestion is only shown in the form; it isn't reserved or written
+    anywhere, and the user may type any other number (OQ-07).
+    refused: one message per link pointing outside the root; the rest
+    still counts.
+    """
+    refused = []
+    highest = 0
+    for folder in ir_folders(root, refused):
+        for path, match in matching_files(root, folder, IR_NUMBER_RE, refused):
+            # As a number, so IR-010 beats IR-009.
+            highest = max(highest, int(match.group(1)))
+    # Sorted, as in finding_id_warnings().
+    refused.sort()
+    if highest == 999:
+        return None, refused
+    return "%03d" % (highest + 1), refused
+
+
+def ir_number_warnings(root, nnn):
+    """Return (warnings, refused) for a new incident report numbered nnn.
+
+    warnings: one line per existing IR file with that number, in any
+    field-notes/<name>/ or incoming/<owner>/field-notes/<name>/, e.g.
+    "IR-007 already exists: field-notes/alice/IR-007-old.md". Only a
+    warning, as for findings. refused: one message per link pointing
+    outside the root; the rest is still checked. Raises ValueError if nnn
+    isn't three digits.
+    """
+    # DECISIONS 2026-10-29 Chunk N3 D2 (a spec departure: the spec warns for
+    # finding IDs only). compile.py doesn't catch a duplicate IR ID, so
+    # without this nothing would.
+    ir_id = "IR-" + validate_nnn(nnn)
+    warnings = []
+    refused = []
+    for folder in ir_folders(root, refused):
+        # The same files suggest_ir_number() counts.
+        for path, match in matching_files(root, folder, IR_NUMBER_RE, refused):
+            if match.group(1) == nnn:
+                warnings.append(ir_id + " already exists: " + path)
+    # Sorted, as in finding_id_warnings().
+    refused.sort()
+    return warnings, refused
+
+
+# The markers New fills in (templates/README.md): [[FINDING_ID]] -> F-NNN,
+# [[IR_ID]] -> IR-NNN, [[FINDING_TITLE]] -> the title. Only these exact
+# names; [[FINDING_ID_EXTRA]] or [[PREVIOUS_FINDING_ID]] are left alone.
+NEW_FILE_MARKER_RE = re.compile(r"\[\[(FINDING_ID|FINDING_TITLE|IR_ID)\]\]")
+
+
+def fill_new_file_markers(text, values):
+    """Replace each exact marker named in values with its value, e.g. {"IR_ID": "IR-007"}.
+
+    One pass over the text, so a value is never scanned again: a title
+    containing "[[FINDING_ID]]" goes in exactly as typed. A marker not in
+    values is left as it is.
+    """
+    return NEW_FILE_MARKER_RE.sub(
+        lambda match: values.get(match.group(1), match.group(0)), text)
+
+
+def checked_new_number(type_name, entry, nnn):
+    """Return the checked three-digit number for this type, or None if it has none.
+
+    Raises ValueError for a missing, wrong or unwanted number. The number is
+    the one the user typed; the IR suggestion is never used here (OQ-07).
+    """
+    if not entry["needs_nnn"]:
+        # Refused rather than ignored, so a mixed-up form is noticed.
+        if nnn is not None:
+            raise ValueError(type_name + " has no number: " + repr(nnn))
+        return None
+    # validate_nnn() expects text; anything else from a JSON body (null, a
+    # number, a list) gets the same readable error.
+    if not isinstance(nnn, str):
+        raise ValueError("the number must be exactly three digits, e.g. 007: " + repr(nnn))
+    return validate_nnn(nnn)
+
+
+def read_template(root, path):
+    """Return a template's text, e.g. path "templates/finding.md".
+
+    Raises compile.RootError if path is refused, and compile.InputError if
+    it isn't a file or isn't UTF-8 text.
+    """
+    resolved = readable_path(root, path)
+    # After the path check, so a link pointing outside is never followed.
+    if not resolved.is_file():
+        raise compile.InputError("template not found: " + path)
+    return compile.read_markdown(resolved)
+
+
+def new_file_text(root, type_name, entry, title, nnn, library):
+    """Return the new file's text: its template or library entry with the ID and title filled.
+
+    Raises ValueError, compile.RootError or compile.InputError if the
+    library entry or template can't be used.
+    """
+    values = {}
+    if type_name == "Finding":
+        values = {"FINDING_ID": "F-" + nnn, "FINDING_TITLE": title}
+    elif type_name == "Incident report":
+        values = {"IR_ID": "IR-" + nnn}
+    if library is not None:
+        if not entry["library"]:
+            raise ValueError("only a Finding can start from the findings library, not a "
+                             + type_name)
+        if not isinstance(library, str):
+            raise ValueError("the library entry must be a path: " + repr(library))
+        text = read_library_entry(root, library)
+        lines = text.split("\n")
+        index = library_heading_index(library, lines)
+        # Every line gets its markers filled, then the first heading is set
+        # to the title as typed (OQ-03): an unchanged title gives the same
+        # line, an edited one replaces only the text after the prefix.
+        lines = [fill_new_file_markers(line, values) for line in lines]
+        line_end = "\r" if lines[index].endswith("\r") else ""
+        lines[index] = fill_new_file_markers(LIBRARY_HEADING, values) + title + line_end
+        return "\n".join(lines)
+    if entry["template"] is None:
+        return ""
+    return fill_new_file_markers(read_template(root, entry["template"]), values)
+
+
+def check_new_file_path(root, logdir, path):
+    """Return the full path to create path at, after checking every part of it.
+
+    Raises compile.RootError if the path or a folder on the way leads
+    outside the root, into incoming/ or the log folder, if a folder on the
+    way isn't a folder, or if anything is already at path.
+    """
+    # Inside the root and not in incoming/ or the log folder, following any
+    # linked folder on the way (OQ-17); the name itself must not exist yet.
+    writable_path(root, logdir, path)
+    full = os.path.join(str(root), path)
+    # list() first: slicing Path.parents needs Python 3.10. The last parent
+    # is "." (the root itself), which needs no check.
+    for folder in reversed(list(Path(path).parents)[:-1]):
+        folder_path = os.path.join(str(root), str(folder))
+        # A file or a broken link where a folder should be would make mkdir
+        # fail halfway; caught here instead, before anything is made.
+        if os.path.lexists(folder_path) and not os.path.isdir(folder_path):
+            raise compile.RootError("not a folder, so nothing can be saved in it: " + str(folder))
+    # lexists() sees a link, a broken link, a folder or a hard-linked file
+    # at the name itself, not only a plain file: a new file never replaces
+    # or writes through anything already there (as Chunk N2 CR-1).
+    if os.path.lexists(full):
+        raise compile.RootError("already exists, choose a different title: " + path)
+    return full
+
+
+def create_new_file(root, logdir, name, type_name, title, nnn=None, library=None):
+    """Create the New form's file and return (path, warnings, refused).
+
+    path is root-relative, e.g. "field-notes/alice/IR-007-db-down.md".
+    warnings and refused are finding_id_warnings()'s for a Finding and
+    ir_number_warnings()'s for an Incident report; they never stop the file
+    being created. Everything is checked before the
+    first folder or file is made, so a refused call changes nothing.
+    Raises ValueError, compile.RootError or compile.InputError (and OSError
+    for an unreadable template) with a message naming what was refused.
+    """
+    entry = new_file_type(type_name)
+    if not isinstance(title, str):
+        raise ValueError("the title must be text: " + repr(title))
+    # A line break would start a new line in the file, e.g. a second
+    # "- **Severity:**" line that compile.py would then read (DECISIONS
+    # 2026-10-29 Chunk N3 D5). The title isn't repeated in the message.
+    if "\r" in title or "\n" in title:
+        raise ValueError("the title must be one line, with no line breaks")
+    # The file name only ever uses the slug: "/", "..", NUL and "%" can't
+    # reach it.
+    slug = slugify(title)
+    nnn = checked_new_number(type_name, entry, nnn)
+    text = new_file_text(root, type_name, entry, title, nnn, library)
+    path = entry["path"].format(name=name, nnn=nnn, slug=slug)
+    full = check_new_file_path(root, logdir, path)
+    warnings, refused = [], []
+    if type_name == "Finding":
+        warnings, refused = finding_id_warnings(root, nnn)
+    elif type_name == "Incident report":
+        warnings, refused = ir_number_warnings(root, nnn)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    try:
+        # "x" creates the file only if nothing is there, so a file that
+        # appeared after the check above is never overwritten.
+        # newline="" writes the template's own line endings unchanged.
+        handle = open(full, "x", encoding="utf-8", newline="")
+    except FileExistsError:
+        raise compile.RootError("already exists, choose a different title: " + path)
+    try:
+        with handle:
+            handle.write(text)
+    except BaseException:
+        # Our own new file only: a failed write leaves no half-made file.
+        os.unlink(full)
+        raise
+    return path, warnings, refused
+
+
+def send_new_data(handler):
+    """GET /new-data: what the New form needs, as JSON.
+
+    The types (with which need a number or may use the library), the
+    library entries, the suggested IR number, and every refused reason. A
+    folder linked outside the root, even a top-level one, is one of those
+    reasons, so the form still opens (DECISIONS 2026-10-29 Chunk N3 D1).
+    """
+    settings = handler.server.settings
+    try:
+        library, library_refused = list_library(settings["root"])
+        suggestion, ir_refused = suggest_ir_number(settings["root"])
+    except OSError as error:
+        send_text(handler, 500, "can't read the New form's data: " + str(error))
+        return
+    # The page builds its Type list and hides or shows fields from this, so
+    # the script holds no list of types of its own.
+    types = [{"name": name, "needs_nnn": entry["needs_nnn"], "library": entry["library"]}
+             for name, entry in NEW_FILE_TYPES.items()]
+    send_json(handler, 200, {
+        "types": types,
+        "library": library,
+        "library_refused": library_refused,
+        "ir_suggestion": suggestion,
+        "ir_note": NO_IR_NUMBER_LEFT if suggestion is None else "",
+        "ir_refused": ir_refused,
+    })
+
+
+MAX_NEW_FILE_BYTES = 64 * 1024
+NEW_FILE_FIELDS = {"type", "title", "nnn", "library"}
+
+
+def read_new_file_request(handler):
+    """Return the New form's fields from a POST's JSON body, or None after sending a 400.
+
+    Exactly {"type", "title", "nnn", "library"}: type and title text, nnn
+    and library text or null. There is no field for a file name or path.
+    """
+    length = handler.headers.get("Content-Length", "")
+    if not (length.isascii() and length.isdigit()) or int(length) > MAX_NEW_FILE_BYTES:
+        send_text(handler, 400, "send one new file as JSON, at most "
+                  + str(MAX_NEW_FILE_BYTES) + " bytes")
+        return None
+    try:
+        fields = json.loads(handler.rfile.read(int(length)).decode("utf-8"))
+    except (ValueError, OSError):
+        # OSError: a body shorter than its Content-Length times out (see
+        # NotebookHandler.timeout) instead of holding the server forever.
+        send_text(handler, 400, "send one new file as JSON, at most "
+                  + str(MAX_NEW_FILE_BYTES) + " bytes")
+        return None
+    # Exactly these fields, so a typo or a "path" field is refused, not ignored.
+    if (not isinstance(fields, dict) or set(fields) != NEW_FILE_FIELDS
+            or not isinstance(fields["type"], str) or not isinstance(fields["title"], str)
+            or not isinstance(fields["nnn"], (str, type(None)))
+            or not isinstance(fields["library"], (str, type(None)))):
+        send_text(handler, 400, 'send {"type": text, "title": text, '
+                  '"nnn": text or null, "library": text or null}')
+        return None
+    return fields
+
+
+def save_new_file(handler):
+    """POST /new-file: create the New form's file; answer {"path", "warnings", "refused"}."""
+    fields = read_new_file_request(handler)
+    if fields is None:
+        return
+    settings = handler.server.settings
+    try:
+        # create_new_file() checks every field and refuses a mixed-up form,
+        # e.g. a number for a Note or a library entry for an incident report.
+        path, warnings, refused = create_new_file(
+            settings["root"], settings["logdir"], settings["name"], fields["type"],
+            fields["title"], nnn=fields["nnn"], library=fields["library"])
+    except ValueError as error:
+        send_text(handler, 400, "not created: " + str(error))
+        return
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    except (compile.InputError, OSError) as error:
+        send_text(handler, 500, "not created: " + str(error))
+        return
+    send_json(handler, 200, {"path": path, "warnings": warnings, "refused": refused})
+
+
 # Where send_page() puts this run's token in the page.
 TOKEN_SLOT = "CPTC_TOKEN_SLOT"
 
@@ -581,12 +1161,19 @@ nav button { display: block; margin-bottom: 0.5rem; }
 label input { margin-right: 0.5rem; }
 /* One <pre> per checklist line; an empty line still takes up a line. */
 pre { margin: 0; min-height: 1.2em; white-space: pre-wrap; }
+/* The file list: full paths wrap rather than widen the column. */
+#file-list div { margin-bottom: 0.25rem; overflow-wrap: anywhere; }
+/* The file just created, so it can be found in the list. */
+#file-list .selected { font-weight: bold; }
+form div { margin-bottom: 0.5rem; }
 </style>
 </head>
 <body>
 <div class="columns">
 <nav id="nav">
 <button type="button" id="theme-toggle">Light / dark</button>
+<div id="file-list"></div>
+<button type="button" id="new-button">New</button>
 <button type="button" id="checklists-button">Checklists</button>
 </nav>
 <main id="main"></main>
@@ -698,9 +1285,184 @@ function saveTick(key, box, status) {
   });
 }
 
+var fileList = document.getElementById("file-list");
+
+/* The person's own files, in the order /files gives them, which groups
+   them by prefix. selected is a path to mark, e.g. the file just created;
+   opening a file comes with the fill-in view (N4). */
+function showFiles(data, selected) {
+  fileList.textContent = "";
+  data.files.forEach(function (path) {
+    var item = fileList.appendChild(element("div", path));
+    if (path === selected) {
+      item.className = "selected";
+    }
+  });
+  /* A link pointing outside isn't listed, but its reason always shows. */
+  data.refused.forEach(function (reason) {
+    fileList.appendChild(element("p", "Not listed: " + reason));
+  });
+}
+
+function loadFiles(selected) {
+  fetch("/files").then(function (response) {
+    if (response.ok) {
+      return response.json().then(function (data) {
+        showFiles(data, selected);
+      });
+    }
+    return response.text().then(function (text) {
+      fileList.textContent = text;
+    });
+  }).catch(function (error) {
+    fileList.textContent = "The notebook isn't answering: " + error;
+  });
+}
+
+/* A labelled control in its own row; returns the row, to hide or add to. */
+function addField(form, text, control) {
+  var row = form.appendChild(element("div"));
+  var label = row.appendChild(element("label", text + " "));
+  label.appendChild(control);
+  return row;
+}
+
+/* The New form. There is no file name or path field: the notebook builds
+   the name from the type, the number and the title. */
+function showNewForm(data) {
+  main.textContent = "";
+  main.appendChild(element("h2", "New file"));
+  var form = main.appendChild(element("form"));
+  /* One line, so a title can't split the heading it goes into. */
+  var title = element("input");
+  title.type = "text";
+  addField(form, "Title", title);
+  var typeList = element("select");
+  data.types.forEach(function (kind) {
+    var option = typeList.appendChild(element("option", kind.name));
+    option.value = kind.name;
+  });
+  addField(form, "Type", typeList);
+  var nnn = element("input");
+  nnn.type = "text";
+  var nnnRow = addField(form, "Number (NNN)", nnn);
+  var nnnNote = nnnRow.appendChild(element("p", ""));
+  data.ir_refused.forEach(function (reason) {
+    nnnRow.appendChild(element("p", "Not counted for the IR number: " + reason));
+  });
+  var library = element("select");
+  var blank = library.appendChild(element("option", "templates/finding.md (no library entry)"));
+  blank.value = "";
+  data.library.forEach(function (entry) {
+    var option = library.appendChild(element("option", entry.title + " (" + entry.path + ")"));
+    option.value = entry.path;
+  });
+  var libraryRow = addField(form, "Start from", library);
+  data.library_refused.forEach(function (reason) {
+    libraryRow.appendChild(element("p", "Not offered: " + reason));
+  });
+  var create = form.appendChild(element("div")).appendChild(element("button", "Create"));
+  create.type = "button";
+  var status = form.appendChild(element("div"));
+
+  function chosenType() {
+    return data.types[typeList.selectedIndex];
+  }
+
+  /* Show only the fields this type uses. A hidden field's value is never
+     sent, so an old value can't make the request a mixed-up one. */
+  function typeChanged() {
+    var kind = chosenType();
+    nnnRow.hidden = !kind.needs_nnn;
+    libraryRow.hidden = !kind.library;
+    /* An incident report starts from the suggested number (OQ-07); a
+       finding's number is the team's to pick (R6), so it starts empty. */
+    var incident = kind.name === "Incident report";
+    nnn.value = incident ? (data.ir_suggestion || "") : "";
+    nnnNote.textContent = incident ? data.ir_note : "";
+  }
+  typeList.addEventListener("change", typeChanged);
+  typeChanged();
+
+  /* Ask the server again for the suggested IR number and show it. If that
+     fails, the box is emptied with the reason, never left at a number that
+     may now be taken. */
+  function refreshSuggestion() {
+    fetch("/new-data").then(function (response) {
+      return response.ok ? response.json() : null;
+    }).catch(function () {
+      return null;
+    }).then(function (fresh) {
+      data.ir_suggestion = fresh ? fresh.ir_suggestion : null;
+      data.ir_note = fresh ? fresh.ir_note : "Couldn't get the next IR number: type one in.";
+      /* Only an incident report's number comes from the suggestion; any
+         other type's fields stay as they are. */
+      if (chosenType().name === "Incident report") {
+        typeChanged();
+      }
+    });
+  }
+
+  /* Picking a library entry puts its title in the Title box, to keep or
+     edit (OQ-03). */
+  library.addEventListener("change", function () {
+    var entry = data.library[library.selectedIndex - 1];
+    if (entry) {
+      title.value = entry.title;
+    }
+  });
+
+  create.addEventListener("click", function () {
+    var kind = chosenType();
+    var request = {
+      type: kind.name,
+      title: title.value,
+      nnn: kind.needs_nnn ? nnn.value : null,
+      library: kind.library && library.value ? library.value : null
+    };
+    /* Locked until the answer, so one click makes at most one file. */
+    create.disabled = true;
+    status.textContent = "";
+    function notCreated(text) {
+      /* The form keeps its values, so the user can correct them. */
+      create.disabled = false;
+      status.appendChild(element("p", text));
+    }
+    fetch("/new-file", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-CPTC-Token": TOKEN},
+      body: JSON.stringify(request)
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(notCreated);
+      }
+      return response.json().then(function (result) {
+        create.disabled = false;
+        status.appendChild(element("p", "Created " + result.path));
+        result.warnings.forEach(function (warning) {
+          status.appendChild(element("p", "Warning: " + warning));
+        });
+        result.refused.forEach(function (reason) {
+          status.appendChild(element("p", "Not checked for duplicates: " + reason));
+        });
+        loadFiles(result.path);
+        refreshSuggestion();
+      });
+    }).catch(function (error) {
+      notCreated("Not created: " + error);
+    });
+  });
+}
+
+document.getElementById("new-button").addEventListener("click", function () {
+  getJson("/new-data", showNewForm);
+});
+
 document.getElementById("checklists-button").addEventListener("click", function () {
   getJson("/checklists", showChecklistList);
 });
+
+loadFiles();
 </script>
 </body>
 </html>
@@ -712,12 +1474,19 @@ GET_ROUTES = {"/": send_page,
               "/checklists": send_checklist_list,
               "/checklist": send_checklist,
               "/checklist-view": send_checklist_view,
-              "/files": send_own_files}
-POST_ROUTES = {"/checklist-state": save_tick}
+              "/files": send_own_files,
+              "/new-data": send_new_data}
+POST_ROUTES = {"/checklist-state": save_tick,
+               "/new-file": save_new_file}
 
 
 class NotebookHandler(BaseHTTPRequestHandler):
     """Answers each request; the server must have a `token` attribute."""
+
+    # Seconds a connection may wait for more of its request. The server
+    # answers one request at a time, so a body shorter than its
+    # Content-Length would otherwise hold it forever.
+    timeout = 10
 
     def do_GET(self):
         self.answer("GET", GET_ROUTES)
