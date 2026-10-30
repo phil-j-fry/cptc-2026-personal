@@ -410,6 +410,54 @@ Checks a teammate runs by hand on their own Kali VM, never in `~/cptc-work`: aft
 9. **The git clone is refused.** `cd` into your git clone and run `python3 tools/compile.py --root .`
    You should see: `compile failed: this looks like the git clone (<your clone's full path> has .git); run on the working copy, e.g. ~/cptc-work`, exit 2. It doesn't create `build/` there: `ls build` finds no such folder, unless the clone already had one.
 
+#### `notebook.py`
+
+Covers what is built today: start-up, the page, checklists, your own files and New file. Items for the fill-in view, autosave, logs, export and the compile button are added here as each one is built. The part that opens and saves your own files is built but has no page yet; its items come with the fill-in page, since how the page talks to it may still change before then.
+
+**Setup:** step 1 of "Example: a practice run" above makes `~/cptc-practice`. In one terminal, from inside it, start the notebook on a spare port so it can't clash with a real one: `python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766`. Open `http://127.0.0.1:8766` in Firefox on the same box. Run the commands below in a second terminal, also from inside `~/cptc-practice`. Any item that adds a file removes it again at its end. When you're done, stop the notebook with Ctrl+C (it prints `Notebook stopped.`) and clean up with step 5 of the example.
+
+1. **Options.** `python3 tools/notebook.py --help`
+   You should see: `--name` (required), `--root` with the default `~/cptc-work`, `--port` with the default 8765, and no option for the address.
+2. **Start-up lines.** In the first terminal, after the start command above.
+   You should see: `Notebook: http://127.0.0.1:8766` and `Local only: it listens on 127.0.0.1, so only this box can open it. Ctrl+C stops it.`
+3. **The default root is `~/cptc-work`, not the folder you're in.** `HOME="$PWD/manual-test-home" python3 tools/notebook.py --name alice --port 8767`
+   You should see: `notebook failed: root folder not found: /home/kali/cptc-practice/manual-test-home/cptc-work`, exit 2.
+4. **A name with nothing usable is refused.** `python3 tools/notebook.py --name '!!!' --root ~/cptc-practice --port 8767`
+   You should see: `notebook.py: error: argument --name: no letters or digits to make a file name from: '!!!'`, exit 2.
+5. **A port already in use.** `python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766` while the first one runs.
+   You should see: `notebook failed: can't listen on 127.0.0.1:8766: ...`, exit 2. The first notebook keeps running.
+6. **The git clone is refused.** `cd` into your git clone and run `python3 tools/notebook.py --name alice --root . --port 8767`
+   You should see: `notebook failed: this looks like the git clone (<your clone's full path> has .git); run on the working copy, e.g. ~/cptc-work`, exit 2. Then `cd ~/cptc-practice`.
+7. **The page.** In Firefox.
+   You should see: a left column with `Light / dark`, your files, `New` and `Checklists`, and nothing else (no Logs, Export or Compile yet). The colours follow your system's light or dark setting; `Light / dark` swaps them.
+8. **Checklists and saved ticks.** `md5sum checklists/*.md > ../checklists.md5`. Click `Checklists`, open one, and tick a task. Reload the page and open the same checklist again.
+   You should see: every `- [ ]` line as a checkbox and every other line as it is in the file; the tick is still there after the reload; `cat field-notes/alice/checklist-state.json` shows it as `true`. `md5sum -c ../checklists.md5` prints `OK` for every checklist: the checklists themselves never change. Then `rm ../checklists.md5`.
+9. **A broken tick file is refused, not overwritten.** `cp field-notes/alice/checklist-state.json ../state.bak`, then `echo '{oops' > field-notes/alice/checklist-state.json`. Open the checklist again and click a checkbox.
+   You should see: above the checklist, `field-notes/alice/checklist-state.json can't be read (...)`; the click is undone and the line says `tick not saved: field-notes/alice/checklist-state.json can't be read (...)`; the file still holds `{oops`. Then `mv ../state.bak field-notes/alice/checklist-state.json`.
+10. **File content is shown as text, never run.** `printf -- '- [ ] <script>alert(1)</script>\n' > checklists/99-manual-test.md`, then reopen `Checklists` and open it.
+    You should see: a checkbox labelled `<script>alert(1)</script>` as plain text, and no pop-up. Then `rm checklists/99-manual-test.md`.
+11. **Your own files.** Reload the page.
+    You should see: `findings/F-001-default-admin-password.md`, `findings/F-002-smb-signing.md` and `field-notes/alice/SU-midday.md`, sorted by file name so the prefixes group. Then `mkdir -p incoming/bob/findings && cp findings/F-001-default-admin-password.md incoming/bob/findings/` and reload: the teammate's copy isn't listed. Then `ln -s / findings/F-009-x.md` and reload: the column shows `Not listed: path is outside the root: findings/F-009-x.md -> /`. Then `rm -r incoming/bob findings/F-009-x.md`.
+12. **New file: the form.** Click `New` and pick each type in turn.
+    You should see: the five types (Note, Incident report, Status update, Inject response, Finding); the `Number (NNN)` box only for Incident report and Finding; for Incident report it already holds `001`; `Start from` only for Finding.
+13. **New file: an incident report, then the same number again.** Type `Incident report`, title `DB down`, keep `001`, click `Create`. Then click `New` again, type `Incident report`, title `Other`, number `001`, `Create`.
+    You should see: `Created field-notes/alice/IR-001-db-down.md`, shown in bold in the left column; the next form suggests `002`; the second file is still created, with `Warning: IR-001 already exists: field-notes/alice/IR-001-db-down.md`.
+14. **New file: a finding number already in use.** Type `Finding`, title `SMB signing`, number `001`, `Create`.
+    You should see: `Created findings/F-001-smb-signing.md` and `Warning: F-001 already exists: findings/F-001-default-admin-password.md`. The file is made anyway: who gets which ID is the team's call (rule R6).
+15. **New file: an existing file is never overwritten.** Repeat item 14 exactly.
+    You should see: `refused: already exists, choose a different title: findings/F-001-smb-signing.md`; `cat` shows the file unchanged. Then `rm field-notes/alice/IR-001-*.md findings/F-001-smb-signing.md`.
+16. **Requests from anywhere else are refused.** Each command prints one line, and nothing in `~/cptc-practice` changes (`ls -l --full-time field-notes/alice` shows the same times before and after):
+    - `curl -s -H 'Host: evil.example:8766' http://127.0.0.1:8766/` gives `refused: use http://127.0.0.1:8766` (a wrong `Host`, as DNS rebinding would send)
+    - `curl -s http://localhost:8766/` gives the same line: only the exact address `127.0.0.1:8766` is accepted
+    - `curl -s -X POST -d '{"key": "x", "checked": true}' http://127.0.0.1:8766/checklist-state` gives the same line: a change without this run's token
+    - `curl -s 'http://127.0.0.1:8766/checklist-view?path=../../etc/passwd'` gives `refused: path contains '..': ../../etc/passwd`
+    - `curl -s -i -X PUT http://127.0.0.1:8766/ | head -n 1` gives `HTTP/1.0 501 Not Implemented`: only GET and POST are answered
+17. **A title with a line break is refused.** The Title box can't hold one, so send it the way the page does, with this run's token:
+    `T=$(curl -s http://127.0.0.1:8766/ | sed -n 's/.*name="cptc-token" content="\([^"]*\)".*/\1/p')`, then `curl -s -X POST -H "X-CPTC-Token: $T" -d '{"type": "Note", "title": "a\nb", "nnn": null, "library": null}' http://127.0.0.1:8766/new-file`
+    You should see: `not created: the title must be one line, with no line breaks`, and no new file in `field-notes/alice/`.
+18. **The log folder (`$LOGDIR`) is read from the environment and never written.** Stop the notebook (Ctrl+C) and start it again with the log folder pointed into the practice copy: `LOGDIR="$PWD/field-notes/alice" python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766`. Reload the page, click `New`, pick `Note`, title `log test`, `Create`.
+    You should see: `refused: the log folder is read-only, not writing: field-notes/alice/NOTE-log-test.md`, and no new file. Then stop it and start it once more with `env -u LOGDIR python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766`: the same Note is now created, because the log folder is back to its default, `~/cptc-logs`, outside the practice copy. Then `rm field-notes/alice/NOTE-log-test.md`. Viewing the logs comes with the log viewer.
+
 ### Questions Operations might ask
 
 Short answers a teammate can give. `scripts/logged-shell.md` has its own.
@@ -422,3 +470,18 @@ Short answers a teammate can give. `scripts/logged-shell.md` has its own.
 - **"Does it run commands?"** No. Nothing in it starts another program. If `pandoc` is installed, it prints the command to convert `report.md`; a person copies it and runs it.
 - **"Can it change a teammate's files, or ours?"** It never changes a file it reads: our findings, teammates' files in `incoming/<name>/` (rule R18), the index, the timeline files and `report.md`. The only files it writes are its own four outputs in `build/`, rewritten on every run that isn't refused. Before writing, it checks `build/` and each of its four files, so a link there can't redirect a write into `incoming/` or `report.md`.
 - **"What doesn't it check?"** It runs only the checks in "The checks" above: mostly each finding's labelled lines at the top, its reproduction steps, leftover placeholders, and the file names and IDs. It doesn't judge whether a finding is right or complete: not the technical content, not whether the CVSS score matches the vector or the severity, and not whether sections such as Remediation are there. In `report.md` (`--final` only) it looks only for leftover markers and older-style leftovers, and it can't read the exported PDF or DOCX, so the manual checks in `checklists/50-report-qa.md` still apply.
+
+#### `notebook.py`
+
+Answers for what is built today (see "What it does today" above).
+
+- **"Where did this come from?"** (**Unconfirmed** whether AI-assisted code is acceptable; blocked by the open question "Does the 'explain your code' rule cover AI-assisted code?") It was written for this team with AI assistance, from our own design brief. It uses only Python's standard library, and each part was reviewed function by function before it was accepted.
+- **"Can you explain how it works?"** It was written to be explainable (rule R4): small, plainly named functions, with comments that say why. It was reviewed function by function. The function-by-function walkthrough (`tools/notebook-breakdown.md`: each function's line range, what it does, and a short answer for questions like these) is in the public app repo; see the line under "What's here".
+- **"Is it a server on the network?"** No. It listens only on `127.0.0.1`, so only the box it runs on can open it. The address is written into the code, and there is no option to change it. It also refuses any request whose `Host` isn't exactly `127.0.0.1:<port>`, so a website can't reach it by pointing its own name at `127.0.0.1` (DNS rebinding). It makes no outbound connections, and the page loads nothing from the internet: its styles and script are inside the page.
+- **"Is there a login?"** No. It's a single-person tool on your own box, like a text editor. Each run makes a new random token and puts it in its own page; every request that changes something must carry it. That stops other websites open in the same browser (including a client app we are testing) from making changes, because they can't read our page to learn the token. It isn't a password: anyone who can use the box can open the page.
+- **"Can a hostile file or log run code in the page?"** No. File content is put into the page as plain text only, never as HTML, so a `<script>` in a file shows as text. Every response except the one app page is plain text or JSON, with headers that stop the browser from treating it as a web page or showing it inside another site.
+- **"What does it store, and where?"** Only plain files in the working copy (`~/cptc-work` by default): the `.md` files you create with New (in `findings/` or `field-notes/<yourname>/`) and your checklist ticks in `field-notes/<yourname>/checklist-state.json`. It can also save your own `.md` files there; the fill-in page that will use this is still to come. It never changes the checklists, the templates or the findings library, and it never overwrites an existing file when making a new one.
+- **"Can logs with secrets leak through it?"** Our terminal logs (`~/cptc-logs/`, or `$LOGDIR`) can hold secrets: passwords, hashes and tokens typed or printed during the test. Today the notebook doesn't show logs at all: the log viewer isn't built. It never writes into the log folder. When the viewer is built it will show logs read-only, only on `127.0.0.1` with no outbound connections, and the planned export leaves logs out unless a box is ticked (off by default). Redact secrets before any log text goes into a finding or the report.
+- **"Does it run commands?"** No. Nothing in it starts another program, and a test reads its source to check that it doesn't import subprocess and never uses os.system, os.popen, exec or eval.
+- **"Can it change a teammate's files?"** No. Teammates' copies in `incoming/<name>/` are never listed, and every write refuses a path inside `incoming/` (rule R18) or the log folder. It also refuses a folder or file whose link points outside the working copy, and it refuses to start in the git clone.
+- **"What's built, and what isn't?"** Built: the checklists, the list of your own files and New file, plus the part that opens and saves your own files. Not built yet: the fill-in page with autosave, the log viewer, export (one zip), the compile button and the combined Markdown export. Until they are, use a text editor, `compile.py` from the terminal and `zip -r`, as "Until then" above says.
