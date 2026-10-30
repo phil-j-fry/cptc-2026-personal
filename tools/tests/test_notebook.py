@@ -6,10 +6,12 @@ import compile
 
 import ast
 import contextlib
+import datetime
 import http.client
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import stat
@@ -17,9 +19,11 @@ import string
 import tempfile
 import threading
 import unittest
+import zipfile
 from html.parser import HTMLParser
 from http.server import HTTPServer
 from unittest import mock
+from pathlib import Path
 from urllib.parse import quote
 
 
@@ -123,9 +127,13 @@ class ModuleSafetyTests(unittest.TestCase):
                 imported.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
                 imported.add(node.module)
-        # No subprocess. os is for $LOGDIR and the tick-state file's safe
-        # write; the test below checks that os.system and os.popen never appear.
-        self.assertEqual(imported, {"argparse", "html", "json", "os", "re", "secrets", "sys", "tempfile",
+        # No subprocess. os is for $LOGDIR, the safe writes and the export's
+        # walk that never follows a link (N5-01), and stat reads the file types
+        # that walk sees; the test below checks os.system and os.popen never appear.
+        # shutil only copies a file into the zip, and zipfile only writes one
+        # (N5-02; ExportZipTests checks nothing extracts).
+        self.assertEqual(imported, {"argparse", "datetime", "html", "json", "os", "re", "secrets",
+                                    "shutil", "stat", "sys", "tempfile", "zipfile",
                                     "http.server", "pathlib", "urllib.parse", "compile"})
 
     def test_no_command_running_call_appears(self):
@@ -4151,16 +4159,18 @@ class AppShellTests(ServerTestCase):
         parts.feed(page)
         return page, parts
 
-    def test_nav_has_the_file_list_new_and_checklists(self):
+    def test_nav_has_the_file_list_new_checklists_and_export(self):
         page, parts = self.get_page()
         self.assertEqual(parts.inside["nav"], [("button", "theme-toggle"),
                                                ("div", "file-list"),
                                                ("button", "new-button"),
-                                               ("button", "checklists-button")])
+                                               ("button", "checklists-button"),
+                                               ("button", "export-button")])
         self.assertEqual(parts.inside["main"], [])
-        # No Logs/Export/Compile controls yet: the only words on the page
-        # are the three buttons'.
-        self.assertEqual(parts.visible_text, ["Light / dark", "New", "Checklists"])
+        # No Logs/Compile controls yet: the only words on the page are the
+        # four buttons'. Export comes after Checklists, where Logs will go
+        # between them (Look and layout).
+        self.assertEqual(parts.visible_text, ["Light / dark", "New", "Checklists", "Export"])
         # The file list loads when the page opens.
         self.assertIn("\nloadFiles();\n</script>", page)
 
@@ -4179,9 +4189,10 @@ class AppShellTests(ServerTestCase):
     def test_script_posts_the_token_and_locks_boxes(self):
         # The display-safety asserts are in PageSafetyTests (NT4-06).
         page, _ = self.get_page()
-        # All three POSTs (a tick, a new file, a save of a file) send the token.
-        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 3)
-        self.assertEqual(page.count("fetch("), 7)
+        # All four POSTs (a tick, a new file, a save of a file, an export)
+        # send the token.
+        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 4)
+        self.assertEqual(page.count("fetch("), 8)
         self.assertIn('fetch("/new-file", {\n      method: "POST",', page)
         self.assertIn('box.type = "checkbox";', page)
         # A box is locked while its save is pending and, if the save fails,
@@ -4501,6 +4512,810 @@ class FillInPageTests(ServerTestCase):
         self.assertIn('var copy = row.appendChild(element("button", "Copy"));', page)
         self.assertIn("navigator.clipboard.writeText(text).then(function () {", page)
         self.assertIn('" Not copied (" + error + "): select the text and copy it by hand."', page)
+
+
+# One file in each export folder plus everything that must stay out of the zip.
+EXPORT_FILES = {
+    "findings/F-001-a.md": "finding\n",
+    "evidence/scan.txt": "scan output\n",
+    "evidence/web01/shot.txt": "nested evidence\n",
+    "field-notes/alice/NOTE-x.md": "alice's note\n",
+    "tracker/findings-index.csv": "finding_id\nF-001\n",
+    "field-notes/bob/NOTE-b.md": "bob's note\n",
+    "incoming/bob/findings/F-009-x.md": "bob's finding\n",
+    "notebooks/n.md": "not exported\n",
+    "notes/study.md": "study\n",
+    "report.md": "report\n",
+    "cptc-export-alice-20261107T101500.zip": "an earlier export\n",
+}
+
+# The members of EXPORT_FILES, in manifest order: folder by folder, then by name.
+EXPORT_MEMBERS = ["findings/F-001-a.md", "evidence/scan.txt", "evidence/web01/shot.txt",
+                  "field-notes/alice/NOTE-x.md", "tracker/findings-index.csv"]
+
+
+class ExportManifestTests(unittest.TestCase):
+    """N5-01: which files the zip export takes (Export (a); OQ-12; Chunk N6 E1, E2)."""
+
+    def setUp(self):
+        self.home = support.make_worktree(self, EXPORT_FILES)
+        self.logs = support.make_worktree(self, {"session-1.log": "log one\n",
+                                                 "old/session-0.log": "log zero\n",
+                                                 "session-1.cmds.log": ""})
+        # A third folder stands in for "somewhere outside", still inside .tmp/.
+        self.outside = support.make_worktree(self, {"secret.txt": "outside\n"})
+
+    def manifest(self, include_logs=False):
+        return notebook.export_manifest(self.home, self.logs, "alice", include_logs)
+
+    def names(self, include_logs=False):
+        return [member for member, path in self.manifest(include_logs)[0]]
+
+    def skipped(self, include_logs=False):
+        return self.manifest(include_logs)[1]
+
+    def test_export_folders_are_the_four_mirror_folders(self):
+        self.assertEqual(notebook.export_folders("alice"),
+                         ["findings", "evidence", "field-notes/alice", "tracker"])
+
+    def test_only_the_four_folders_are_taken(self):
+        self.assertEqual(self.names(), EXPORT_MEMBERS)
+        self.assertEqual(self.skipped(), [])
+        roots = {member.split("/")[0] for member in self.names()}
+        self.assertEqual(roots, {"findings", "evidence", "field-notes", "tracker"})
+
+    def test_each_member_is_its_own_file(self):
+        members, skipped = self.manifest()
+        for member, path in members:
+            self.assertEqual(path, self.home / member)
+            self.assertEqual(path.read_text(encoding="utf-8"), EXPORT_FILES[member])
+
+    def test_logs_are_left_out_by_default(self):
+        members, skipped = notebook.export_manifest(self.home, self.logs, "alice")
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS)
+
+    def test_logs_go_under_logs_when_asked_for(self):
+        members, skipped = self.manifest(include_logs=True)
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS + [
+            "logs/old/session-0.log", "logs/session-1.cmds.log", "logs/session-1.log"])
+        self.assertEqual(skipped, [])
+        # An empty log is still a file, so it is still taken.
+        self.assertEqual(members[-2][1], self.logs / "session-1.cmds.log")
+        for member, path in members:
+            # Named by the log folder's contents, never its path on this box.
+            self.assertNotIn(str(self.logs), member)
+
+    def test_logs_have_no_size_limit(self):
+        big = self.logs / "big.log"
+        with big.open("wb") as handle:
+            handle.truncate(64 * 1024 * 1024)
+        self.assertIn("logs/big.log", self.names(include_logs=True))
+
+    def test_nothing_to_export_is_an_empty_manifest(self):
+        home = support.make_worktree(self)
+        missing_logs = home / "no-logs-here"
+        self.assertEqual(notebook.export_manifest(home, missing_logs, "alice", True), ([], []))
+
+    def test_member_names_are_plain_relative_paths(self):
+        names = self.names(include_logs=True)
+        self.assertEqual(len(names), len(set(names)))
+        for member in names:
+            self.assertFalse(member.startswith("/"), member)
+            self.assertNotIn("\\", member)
+            self.assertNotIn("..", member.split("/"))
+
+    def test_order_never_depends_on_the_disk(self):
+        expected = self.manifest(include_logs=True)
+        real_listdir = os.listdir
+        # On this Mac the disk happens to list names sorted, so reverse it.
+        with mock.patch("os.listdir", lambda path: sorted(real_listdir(path), reverse=True)):
+            self.assertEqual(self.manifest(include_logs=True), expected)
+
+    def assert_link_skipped(self, link, report, include_logs=False):
+        """Check the link is reported, its target is not taken, and the rest still is."""
+        members, skipped = self.manifest(include_logs)
+        self.assertEqual(skipped, ["not exported: symlink: " + report])
+        for member, path in members:
+            self.assertNotEqual(path, link)
+            self.assertFalse(member.startswith(report + "/"), member)
+            self.assertNotIn("secret", member)
+        return [member for member, path in members]
+
+    def test_nested_file_link_inside_the_root_is_skipped(self):
+        link = self.home / "evidence" / "copy.md"
+        link.symlink_to(self.home / "findings" / "F-001-a.md")
+        self.assertEqual(self.assert_link_skipped(link, "evidence/copy.md"), EXPORT_MEMBERS)
+
+    def test_nested_file_link_outside_the_root_is_skipped(self):
+        link = self.home / "findings" / "secret.txt"
+        link.symlink_to(self.outside / "secret.txt")
+        self.assertEqual(self.assert_link_skipped(link, "findings/secret.txt"), EXPORT_MEMBERS)
+
+    def test_nested_folder_link_is_skipped(self):
+        link = self.home / "evidence" / "web02"
+        link.symlink_to(self.home / "evidence" / "web01")
+        self.assertEqual(self.assert_link_skipped(link, "evidence/web02"), EXPORT_MEMBERS)
+
+    def test_nested_folder_link_outside_the_root_is_skipped(self):
+        link = self.home / "field-notes" / "alice" / "loot"
+        link.symlink_to(self.outside)
+        self.assertEqual(self.assert_link_skipped(link, "field-notes/alice/loot"), EXPORT_MEMBERS)
+
+    def test_linked_log_is_skipped(self):
+        link = self.logs / "secret.log"
+        link.symlink_to(self.outside / "secret.txt")
+        names = self.assert_link_skipped(link, "logs/secret.log", include_logs=True)
+        self.assertIn("logs/session-1.log", names)
+
+    def move_and_link(self, folder, target):
+        """Replace folder (root-relative) with a link to target."""
+        shutil.rmtree(str(self.home / folder))
+        (self.home / folder).symlink_to(target)
+        return self.home / folder
+
+    def without(self, prefix):
+        return [member for member in EXPORT_MEMBERS if not member.startswith(prefix + "/")]
+
+    def test_linked_findings_folder_is_skipped(self):
+        link = self.move_and_link("findings", self.home / "incoming" / "bob" / "findings")
+        self.assertEqual(self.assert_link_skipped(link, "findings"), self.without("findings"))
+
+    def test_linked_evidence_folder_outside_the_root_is_skipped(self):
+        link = self.move_and_link("evidence", self.outside)
+        self.assertEqual(self.assert_link_skipped(link, "evidence"), self.without("evidence"))
+
+    def test_linked_tracker_folder_is_skipped(self):
+        link = self.move_and_link("tracker", self.home / "notes")
+        self.assertEqual(self.assert_link_skipped(link, "tracker"), self.without("tracker"))
+
+    def test_linked_own_field_notes_folder_is_skipped(self):
+        link = self.move_and_link("field-notes/alice", self.home / "field-notes" / "bob")
+        self.assertEqual(self.assert_link_skipped(link, "field-notes/alice"),
+                         self.without("field-notes/alice"))
+
+    def test_linked_field_notes_folder_is_skipped(self):
+        # field-notes/alice exists in the target, so following the link would find it.
+        shared = support.make_worktree(self, {"alice/NOTE-other.md": "not alice's\n"})
+        link = self.move_and_link("field-notes", shared)
+        self.assertEqual(self.assert_link_skipped(link, "field-notes"),
+                         self.without("field-notes/alice"))
+
+    def test_linked_log_folder_is_skipped(self):
+        link = self.home / "loglink"
+        link.symlink_to(self.logs)
+        members, skipped = notebook.export_manifest(self.home, link, "alice", True)
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS)
+        self.assertEqual(skipped, ["not exported: symlink: logs"])
+
+    def test_broken_link_is_skipped(self):
+        link = self.home / "evidence" / "gone.txt"
+        link.symlink_to(self.home / "evidence" / "missing.txt")
+        self.assertEqual(self.assert_link_skipped(link, "evidence/gone.txt"), EXPORT_MEMBERS)
+
+    def test_link_loop_is_skipped(self):
+        link = self.home / "evidence" / "loop"
+        link.symlink_to(link)
+        self.assertEqual(self.assert_link_skipped(link, "evidence/loop"), EXPORT_MEMBERS)
+
+    def test_folder_link_back_up_is_skipped(self):
+        link = self.home / "evidence" / "web01" / "up"
+        link.symlink_to(self.home / "evidence")
+        self.assertEqual(self.assert_link_skipped(link, "evidence/web01/up"), EXPORT_MEMBERS)
+
+    def test_fifo_is_skipped_without_opening_it(self):
+        fifo = self.home / "evidence" / "pipe"
+        os.mkfifo(str(fifo))
+        # Opening a FIFO for reading would hang here, so finishing at all shows
+        # it was never opened.
+        members, skipped = self.manifest()
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS)
+        self.assertEqual(skipped, ["not exported: not a regular file: evidence/pipe"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_unreadable_folder_is_skipped_and_the_rest_taken(self):
+        locked = self.home / "evidence" / "web01"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        members, skipped = self.manifest()
+        self.assertEqual([member for member, path in members],
+                         [member for member in EXPORT_MEMBERS if "web01" not in member])
+        self.assertEqual(len(skipped), 1)
+        self.assertTrue(skipped[0].startswith("not exported: can't read: evidence/web01 ("),
+                        skipped)
+
+    def test_a_file_where_a_folder_should_be_is_skipped(self):
+        # In the zip it would be a file named "tracker", not the mirror layout.
+        home = support.make_worktree(self, {"tracker": "not a folder\n",
+                                            "findings/F-001-a.md": "finding\n"})
+        log_file = home / "findings" / "F-001-a.md"
+        members, skipped = notebook.export_manifest(home, log_file, "alice", True)
+        self.assertEqual([member for member, path in members], ["findings/F-001-a.md"])
+        self.assertEqual(skipped, ["not exported: not a folder: tracker",
+                                   "not exported: not a folder: logs"])
+
+    def test_a_file_where_field_notes_should_be_is_skipped(self):
+        home = support.make_worktree(self, {"field-notes": "not a folder\n"})
+        self.assertEqual(notebook.export_manifest(home, self.logs, "alice"),
+                         ([], ["not exported: not a folder: field-notes"]))
+
+    def test_a_fifo_where_field_notes_should_be_is_skipped(self):
+        home = support.make_worktree(self)
+        os.mkfifo(str(home / "field-notes"))
+        self.assertEqual(notebook.export_manifest(home, self.logs, "alice"),
+                         ([], ["not exported: not a folder: field-notes"]))
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_unreadable_field_notes_folder_is_skipped_and_the_rest_taken(self):
+        locked = self.home / "field-notes"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        members, skipped = self.manifest()
+        self.assertEqual([member for member, path in members], self.without("field-notes/alice"))
+        self.assertEqual(len(skipped), 1)
+        self.assertTrue(skipped[0].startswith("not exported: can't read: field-notes/alice ("),
+                        skipped)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_listable_but_not_searchable_folder_is_skipped_and_the_rest_taken(self):
+        # Read but no search permission: its names list, but none can be looked at.
+        locked = self.home / "evidence" / "web01"
+        locked.chmod(0o400)
+        self.addCleanup(locked.chmod, 0o700)
+        members, skipped = self.manifest()
+        self.assertEqual([member for member, path in members],
+                         [member for member in EXPORT_MEMBERS if "web01" not in member])
+        self.assertEqual(len(skipped), 1)
+        self.assertTrue(skipped[0].startswith("not exported: can't read: evidence/web01/shot.txt ("),
+                        skipped)
+
+    def logs_inside(self, folder):
+        """Return a log folder made inside the working copy at folder (root-relative)."""
+        support.write_fake_file(self.home, folder + "/session-9.log", "secret log\n")
+        return self.home / folder
+
+    def test_log_folder_inside_evidence_is_left_out_by_default(self):
+        logs = self.logs_inside("evidence/logs")
+        members, skipped = notebook.export_manifest(self.home, logs, "alice")
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS)
+        self.assertEqual(skipped, ["not exported: the log folder: evidence/logs"])
+
+    def test_log_folder_inside_evidence_goes_only_under_logs(self):
+        logs = self.logs_inside("evidence/logs")
+        members, skipped = notebook.export_manifest(self.home, logs, "alice", True)
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS + ["logs/session-9.log"])
+        self.assertEqual(skipped, ["not exported: the log folder: evidence/logs"])
+
+    def test_log_folder_as_an_export_folder_is_left_out(self):
+        # LOGDIR set to the working copy's evidence/ itself.
+        logs = self.home / "evidence"
+        members, skipped = notebook.export_manifest(self.home, logs, "alice")
+        self.assertEqual([member for member, path in members], self.without("evidence"))
+        self.assertEqual(skipped, ["not exported: the log folder: evidence"])
+
+    def test_log_folder_reached_through_a_link_is_still_left_out(self):
+        # LOGDIR names a link outside the working copy that points into evidence/.
+        self.logs_inside("evidence/logs")
+        link = self.outside / "loglink"
+        link.symlink_to(self.home / "evidence" / "logs")
+        members, skipped = notebook.export_manifest(self.home, link, "alice", True)
+        self.assertEqual([member for member, path in members], EXPORT_MEMBERS)
+        self.assertEqual(skipped, ["not exported: the log folder: evidence/logs",
+                                   "not exported: symlink: logs"])
+
+
+# The export's file name for alice (Export (a)).
+EXPORT_NAME_RE = re.compile(r"cptc-export-alice-[0-9]{8}T[0-9]{6}\.zip")
+
+# A fixed clock for write_export(), so the file name is known.
+EXPORT_TIME = datetime.datetime(2026, 11, 7, 10, 30, 0)
+
+# The folder entries every export zip starts with (alice, logs not included).
+EXPORT_FOLDER_ENTRIES = ["findings/", "evidence/", "field-notes/alice/", "tracker/"]
+
+
+class ExportZipTests(unittest.TestCase):
+    """N5-02: the export zip in the root, unzipped as incoming/<name>/ (Export (a))."""
+
+    def setUp(self):
+        self.home = support.make_worktree(self, EXPORT_FILES)
+        # Bytes a text round trip would change: binary, empty, BOM + CRLF.
+        (self.home / "evidence" / "shot.png").write_bytes(bytes(range(256)))
+        (self.home / "evidence" / "empty.txt").write_bytes(b"")
+        (self.home / "tracker" / "timeline.csv").write_bytes(b"\xef\xbb\xbftime,event\r\n10:15,x\r\n")
+        self.logs = support.make_worktree(self, {"session-1.log": "log one\n",
+                                                 "old/session-0.log": "log zero\n"})
+        self.outside = support.make_worktree(self, {"secret.txt": "outside\n"})
+
+    def export(self, include_logs=False, now=EXPORT_TIME, home=None):
+        return notebook.write_export(home or self.home, self.logs, "alice", include_logs, now)
+
+    def unzip(self, path):
+        """Unzip path into a fresh test folder; return its files as {path: bytes}."""
+        target = support.make_worktree(self)
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertIsNone(archive.testzip())
+            archive.extractall(str(target))
+        return file_bytes(target)
+
+    def mirror(self, root, folders):
+        """Return root's files under folders and field-notes/alice/ as {path: bytes}.
+
+        Like file_bytes(), but links are left out, as the export leaves them out.
+        """
+        return {path: data for path, data in file_bytes(root).items()
+                if (path.split("/")[0] in folders or path.startswith("field-notes/alice/"))
+                and not (root / path).is_symlink()}
+
+    def test_file_name_and_place(self):
+        path, skipped = self.export()
+        self.assertEqual(path, self.home / "cptc-export-alice-20261107T103000.zip")
+        self.assertTrue(EXPORT_NAME_RE.fullmatch(path.name), path.name)
+        self.assertEqual(path.parent, self.home)
+        self.assertTrue(path.is_file())
+
+    def test_real_clock_name_matches(self):
+        path, skipped = notebook.write_export(self.home, self.logs, "alice")
+        self.assertTrue(EXPORT_NAME_RE.fullmatch(path.name), path.name)
+
+    def test_a_slugged_name_is_used_as_it_is(self):
+        path, skipped = notebook.write_export(self.home, self.logs, "alice-smith", False, EXPORT_TIME)
+        self.assertEqual(path.name, "cptc-export-alice-smith-20261107T103000.zip")
+
+    def test_namelist_is_the_manifest(self):
+        path, skipped = self.export()
+        members, expected_skipped = notebook.export_manifest(self.home, self.logs, "alice")
+        with zipfile.ZipFile(str(path)) as archive:
+            names = archive.namelist()
+        self.assertEqual(names, EXPORT_FOLDER_ENTRIES + [member for member, source in members])
+        self.assertEqual(skipped, [])
+        for name in names:
+            self.assertTrue(name.startswith(("findings/", "evidence/", "field-notes/alice/",
+                                             "tracker/")), name)
+
+    def test_unzipped_tree_is_the_mirror_byte_for_byte(self):
+        path, skipped = self.export()
+        self.assertEqual(self.unzip(path),
+                         self.mirror(self.home, ("findings", "evidence", "tracker")))
+
+    def test_logs_unzip_under_logs_byte_for_byte(self):
+        path, skipped = self.export(include_logs=True)
+        files = self.unzip(path)
+        expected = self.mirror(self.home, ("findings", "evidence", "tracker"))
+        expected.update({"logs/" + name: data for name, data in file_bytes(self.logs).items()})
+        self.assertEqual(files, expected)
+
+    def test_logs_left_out_by_default(self):
+        path, skipped = self.export()
+        self.assertFalse([name for name in self.unzip(path) if name.startswith("logs/")])
+
+    def test_members_are_compressed(self):
+        # Logs are text and can be large, so the zip moves faster compressed.
+        path, skipped = self.export(include_logs=True)
+        with zipfile.ZipFile(str(path)) as archive:
+            for info in archive.infolist():
+                if not info.is_dir():
+                    self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED, info.filename)
+
+    def test_file_times_are_kept(self):
+        source = self.home / "findings" / "F-001-a.md"
+        os.utime(str(source), (1793000000, 1793000000))
+        path, skipped = self.export()
+        with zipfile.ZipFile(str(path)) as archive:
+            stored = archive.getinfo("findings/F-001-a.md").date_time
+        self.assertEqual(stored, datetime.datetime.fromtimestamp(1793000000).timetuple()[:6])
+
+    def test_a_file_time_after_2107_becomes_the_last_zip_time(self):
+        # Year 2128: e.g. evidence copied with its times from a box with a bad clock.
+        os.utime(str(self.home / "findings" / "F-001-a.md"), (5e9, 5e9))
+        path, skipped = self.export()
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertEqual(archive.getinfo("findings/F-001-a.md").date_time, (2107, 12, 31, 23, 59, 58))
+        self.assertEqual(skipped, [])
+
+    def test_times_this_computer_cant_convert_become_the_first_or_last(self):
+        # Far past year 9999: fromtimestamp() itself raises an error.
+        self.assertEqual(notebook.zip_time(1e15), notebook.ZIP_LATEST)
+        self.assertEqual(notebook.zip_time(-1e15), notebook.ZIP_EARLIEST)
+        self.assertEqual(notebook.zip_time(5e9), (2107, 12, 31, 23, 59, 58))
+        self.assertEqual(notebook.zip_time(0), (1980, 1, 1, 0, 0, 0))
+
+    def test_a_log_growing_past_the_zip64_limit_is_copied_whole(self):
+        # A limit of 300 bytes stands in for 2 GB: the log is bigger than
+        # that once copied, as a log still being written can be.
+        log = self.logs / "session-1.log"
+        log.write_bytes(b"x" * 400)
+        with mock.patch.object(zipfile, "ZIP64_LIMIT", 300):
+            path, skipped = self.export(include_logs=True)
+        self.assertEqual(skipped, [])
+        self.assertEqual(self.unzip(path)["logs/session-1.log"], b"x" * 400)
+
+    def test_a_file_time_before_1980_becomes_1980(self):
+        os.utime(str(self.home / "findings" / "F-001-a.md"), (0, 0))
+        path, skipped = self.export()
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertEqual(archive.getinfo("findings/F-001-a.md").date_time, (1980, 1, 1, 0, 0, 0))
+
+    def test_links_and_their_targets_stay_out_and_are_reported(self):
+        (self.home / "evidence" / "secret.txt").symlink_to(self.outside / "secret.txt")
+        (self.home / "evidence" / "copy.md").symlink_to(self.home / "findings" / "F-001-a.md")
+        path, skipped = self.export()
+        self.assertEqual(skipped, ["not exported: symlink: evidence/copy.md",
+                                   "not exported: symlink: evidence/secret.txt"])
+        files = self.unzip(path)
+        self.assertNotIn("evidence/secret.txt", files)
+        self.assertNotIn("evidence/copy.md", files)
+        self.assertNotIn(b"outside\n", files.values())
+        self.assertEqual(files, self.mirror(self.home, ("findings", "evidence", "tracker")))
+
+    def test_a_second_export_leaves_out_the_first(self):
+        first, skipped = self.export()
+        second, skipped = self.export(now=EXPORT_TIME + datetime.timedelta(seconds=1))
+        self.assertNotEqual(first, second)
+        for name in self.unzip(second):
+            self.assertNotIn("cptc-export", name)
+        self.assertEqual(self.unzip(first), self.unzip(second))
+
+    def root_names(self):
+        return sorted(path.name for path in self.home.iterdir())
+
+    def test_same_second_export_is_refused_and_the_first_kept(self):
+        first, skipped = self.export()
+        before = first.read_bytes()
+        names = self.root_names()
+        (self.home / "findings" / "F-002-new.md").write_text("new\n", encoding="utf-8")
+        # Refused before any file is copied, so no big zip is written for nothing.
+        with mock.patch.object(notebook, "add_zip_file") as add, \
+                self.assertRaises(FileExistsError) as caught:
+            self.export()
+        add.assert_not_called()
+        self.assertEqual(str(caught.exception), "an export named cptc-export-alice-20261107T103000.zip"
+                         " already exists; try again in a second")
+        self.assertEqual(first.read_bytes(), before)
+        self.assertEqual(self.root_names(), names)
+
+    def test_a_link_with_the_export_name_pointing_outside_is_refused(self):
+        link = self.home / "cptc-export-alice-20261107T103000.zip"
+        link.symlink_to(self.outside / "secret.txt")
+        # writable_path() refuses it first, as for every other write.
+        with self.assertRaises(compile.RootError):
+            self.export()
+        self.assertEqual((self.outside / "secret.txt").read_text(encoding="utf-8"), "outside\n")
+        self.assertTrue(link.is_symlink())
+
+    def test_a_link_with_the_export_name_inside_the_root_is_refused(self):
+        link = self.home / "cptc-export-alice-20261107T103000.zip"
+        link.symlink_to(self.home / "report.md")
+        with self.assertRaises(FileExistsError):
+            self.export()
+        self.assertEqual((self.home / "report.md").read_text(encoding="utf-8"), "report\n")
+        self.assertTrue(link.is_symlink())
+
+    def test_a_dangling_link_with_the_export_name_is_refused(self):
+        # A link to a file that doesn't exist yet: writing through it would create one.
+        link = self.home / "cptc-export-alice-20261107T103000.zip"
+        link.symlink_to(self.home / "made-by-export.zip")
+        with self.assertRaises(FileExistsError):
+            self.export()
+        self.assertFalse((self.home / "made-by-export.zip").exists())
+
+    def test_a_failed_write_leaves_no_zip_and_no_temp_file(self):
+        names = self.root_names()
+        calls = []
+
+        def fail_on_second(archive, member, path, skipped):
+            calls.append(member)
+            if len(calls) == 2:
+                raise OSError("disk full")
+            real_add(archive, member, path, skipped)
+
+        real_add = notebook.add_zip_file
+        with mock.patch.object(notebook, "add_zip_file", fail_on_second):
+            with self.assertRaises(OSError):
+                self.export()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.root_names(), names)
+
+    def test_a_failed_naming_leaves_no_zip_and_no_temp_file(self):
+        names = self.root_names()
+        with mock.patch.object(notebook.os, "link", side_effect=OSError("link failed")):
+            with self.assertRaises(OSError):
+                self.export()
+        self.assertEqual(self.root_names(), names)
+
+    def test_the_temp_file_is_never_named_like_an_export(self):
+        seen = []
+
+        def look(archive, member, path, skipped):
+            seen.extend(name for name in self.root_names() if name.startswith(".cptc-export-"))
+            real_add(archive, member, path, skipped)
+
+        real_add = notebook.add_zip_file
+        with mock.patch.object(notebook, "add_zip_file", look):
+            path, skipped = self.export()
+        self.assertTrue(seen)
+        for name in seen:
+            self.assertTrue(name.endswith(".part"), name)
+            self.assertIsNone(EXPORT_NAME_RE.fullmatch(name))
+        self.assertEqual([name for name in self.root_names() if name.startswith(".cptc-export-")], [])
+
+    def test_a_refused_root_path_writes_nothing(self):
+        # LOGDIR set to the working copy itself: the root is then read-only.
+        names = self.root_names()
+        with self.assertRaises(compile.RootError):
+            notebook.write_export(self.home, self.home, "alice", False, EXPORT_TIME)
+        self.assertEqual(self.root_names(), names)
+
+    def export_with_members(self, members):
+        """Export with export_manifest() returning members, as if the disk changed after it looked."""
+        with mock.patch.object(notebook, "export_manifest", return_value=(members, [])):
+            return self.export()
+
+    def test_a_file_swapped_for_a_link_after_the_manifest_is_skipped(self):
+        swapped = self.home / "evidence" / "scan.txt"
+        swapped.unlink()
+        swapped.symlink_to(self.outside / "secret.txt")
+        path, skipped = self.export_with_members([("findings/F-001-a.md", self.home / "findings/F-001-a.md"),
+                                                  ("evidence/scan.txt", swapped)])
+        self.assertEqual(skipped, ["not exported: symlink: evidence/scan.txt"])
+        self.assertEqual(list(self.unzip(path)), ["findings/F-001-a.md"])
+
+    def test_a_file_swapped_for_a_fifo_after_the_manifest_is_skipped(self):
+        swapped = self.home / "evidence" / "scan.txt"
+        swapped.unlink()
+        os.mkfifo(str(swapped))
+        # Opening it to read without O_NONBLOCK would hang here.
+        path, skipped = self.export_with_members([("evidence/scan.txt", swapped)])
+        self.assertEqual(skipped, ["not exported: not a regular file: evidence/scan.txt"])
+        self.assertEqual(self.unzip(path), {})
+
+    def test_a_file_gone_after_the_manifest_is_skipped(self):
+        gone = self.home / "evidence" / "scan.txt"
+        gone.unlink()
+        path, skipped = self.export_with_members([("evidence/scan.txt", gone)])
+        self.assertEqual(len(skipped), 1)
+        self.assertTrue(skipped[0].startswith("not exported: can't read: evidence/scan.txt ("), skipped)
+
+    def test_a_backslash_name_is_skipped(self):
+        # Taken before the file is made, so it holds only the rest of the mirror.
+        expected = self.mirror(self.home, ("findings", "evidence", "tracker"))
+        (self.home / "evidence" / "web01\\shot.txt").write_text("backslash\n", encoding="utf-8")
+        path, skipped = self.export()
+        self.assertEqual(skipped, ["not exported: name has a backslash: evidence/web01\\shot.txt"])
+        # evidence/web01/shot.txt is still the real nested file, not this one.
+        self.assertEqual(self.unzip(path), expected)
+
+    def test_a_name_that_is_not_utf8_is_skipped(self):
+        # os.listdir() gives such a name with a lone surrogate standing in for the bad byte.
+        member = "evidence/bad\udcff.txt"
+        path, skipped = self.export_with_members([(member, self.home / "evidence" / "scan.txt")])
+        self.assertEqual(skipped, ["not exported: name isn't UTF-8: " + member])
+        self.assertEqual(self.unzip(path), {})
+
+    def test_skips_from_the_manifest_are_kept(self):
+        os.mkfifo(str(self.home / "evidence" / "pipe"))
+        path, skipped = self.export()
+        self.assertEqual(skipped, ["not exported: not a regular file: evidence/pipe"])
+
+    def test_nothing_to_export_still_makes_an_empty_zip(self):
+        home = support.make_worktree(self)
+        path, skipped = self.export(home=home)
+        self.assertEqual((path.name, skipped), ("cptc-export-alice-20261107T103000.zip", []))
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertEqual(archive.namelist(), EXPORT_FOLDER_ENTRIES)
+
+    def test_an_empty_export_unzips_to_the_four_folders(self):
+        path, skipped = self.export(home=support.make_worktree(self))
+        target = support.make_worktree(self)
+        with zipfile.ZipFile(str(path)) as archive:
+            archive.extractall(str(target))
+        self.assertEqual(sorted(entry.relative_to(target).as_posix() for entry in target.rglob("*")),
+                         ["evidence", "field-notes", "field-notes/alice", "findings", "tracker"])
+
+    def test_logs_folder_entry_only_with_logs(self):
+        path, skipped = self.export(include_logs=True)
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertEqual(archive.namelist()[:5], EXPORT_FOLDER_ENTRIES + ["logs/"])
+            for folder in EXPORT_FOLDER_ENTRIES + ["logs/"]:
+                # Marked as a folder for unzip tools too, not only by its "/".
+                self.assertTrue(stat.S_ISDIR(archive.getinfo(folder).external_attr >> 16), folder)
+        path, skipped = self.export(now=EXPORT_TIME + datetime.timedelta(seconds=1))
+        with zipfile.ZipFile(str(path)) as archive:
+            self.assertNotIn("logs/", archive.namelist())
+
+    def test_a_file_named_like_the_export_while_writing_is_kept(self):
+        # Another program makes a file of the same name after the first check.
+        taken = self.home / "cptc-export-alice-20261107T103000.zip"
+        real_add = notebook.add_zip_file
+
+        def make_it_first(archive, member, path, skipped):
+            if not taken.exists():
+                taken.write_bytes(b"not ours\n")
+            real_add(archive, member, path, skipped)
+
+        with mock.patch.object(notebook, "add_zip_file", make_it_first):
+            with self.assertRaises(FileExistsError) as caught:
+                self.export()
+        self.assertEqual(str(caught.exception), "an export named cptc-export-alice-20261107T103000.zip"
+                         " already exists; try again in a second")
+        self.assertEqual(taken.read_bytes(), b"not ours\n")
+        self.assertEqual([name for name in self.root_names() if name.startswith(".cptc-export-")], [])
+
+    def test_no_code_extracts_a_zip(self):
+        names = set()
+        for node in ast.walk(ModuleSafetyTests.TREE):
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+        for name in ("extract", "extractall", "unpack_archive"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, names)
+
+
+class ExportRouteTests(ServerTestCase):
+    """N5-03: POST /export writes the zip and reports where (Export (a))."""
+
+    def setUp(self):
+        super().setUp()
+        support.write_fake_file(self.root, "evidence/scan.txt", "scan\n")
+        support.write_fake_file(self.logdir, "session-1.log", "log one\n")
+
+    def post(self, body, token="default", host=None, path="/export"):
+        """POST raw body bytes; return (status, text, content type)."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", path, skip_host=True)
+        connection.putheader("Host", host or self.good_host())
+        if token is not None:
+            connection.putheader("X-CPTC-Token", self.server.token if token == "default" else token)
+        connection.putheader("Content-Type", "application/json")
+        connection.putheader("Content-Length", str(len(body)))
+        connection.endheaders(body)
+        response = connection.getresponse()
+        text = response.read().decode("utf-8")
+        self.assert_safe_headers(response)
+        return response.status, text, response.getheader("Content-Type")
+
+    def export(self, include_logs):
+        status, text, content_type = self.post(json.dumps({"include_logs": include_logs}).encode("utf-8"))
+        self.assertEqual((status, content_type), (200, "application/json"), text)
+        return json.loads(text)
+
+    def zips(self):
+        return sorted(path.name for path in self.root.iterdir() if path.name.endswith(".zip"))
+
+    def members(self, path):
+        with zipfile.ZipFile(path) as archive:
+            return archive.namelist()
+
+    def test_export_reports_the_saved_path(self):
+        result = self.export(False)
+        self.assertEqual(set(result), {"path", "skipped"})
+        path = Path(result["path"])
+        self.assertEqual(path.parent, self.root.resolve())
+        self.assertTrue(EXPORT_NAME_RE.fullmatch(path.name), path.name)
+        self.assertEqual(self.zips(), [path.name])
+        self.assertEqual(result["skipped"], [])
+        self.assertEqual(self.members(path), EXPORT_FOLDER_ENTRIES + ["findings/F-001-x.md",
+                                                                      "evidence/scan.txt"])
+
+    def test_logs_only_when_ticked(self):
+        self.assertNotIn("logs/session-1.log", self.members(self.export(False)["path"]))
+        # A second later, so the two zips don't share a name.
+        with mock.patch.object(notebook, "export_file_name",
+                               lambda name, now: "cptc-export-alice-20261107T103001.zip"):
+            path = self.export(True)["path"]
+        self.assertIn("logs/session-1.log", self.members(path))
+
+    def test_skipped_links_are_reported_and_the_zip_still_made(self):
+        (self.root / "evidence" / "copy.md").symlink_to(self.root / "findings" / "F-001-x.md")
+        result = self.export(False)
+        self.assertEqual(result["skipped"], ["not exported: symlink: evidence/copy.md"])
+        self.assertNotIn("evidence/copy.md", self.members(result["path"]))
+
+    def assert_not_exported(self, status_wanted, text_wanted, body, **options):
+        status, text, content_type = self.post(body, **options)
+        self.assertEqual((status, text), (status_wanted, text_wanted))
+        self.assertEqual(content_type, "text/plain; charset=utf-8")
+        self.assertEqual(self.zips(), [])
+        self.assertEqual([path.name for path in self.root.iterdir() if path.name.startswith(".")], [])
+
+    def test_bad_bodies_are_refused_before_any_zip(self):
+        wanted = 'send {"include_logs": true or false}'
+        for body in [b"{}", b'{"include_log": false}', b'{"include_logs": "true"}',
+                     b'{"include_logs": 1}', b'{"include_logs": null}',
+                     b'{"include_logs": false, "path": "x"}', b"[true]", b"not json", b"\xff"]:
+            with self.subTest(body=body), \
+                    mock.patch.object(notebook, "write_export") as write:
+                self.assert_not_exported(400, wanted, body)
+                write.assert_not_called()
+
+    def test_a_long_body_is_refused(self):
+        body = json.dumps({"include_logs": False, "pad": "x" * 2000}).encode("utf-8")
+        self.assert_not_exported(400, "send the export choice as JSON, at most 1024 bytes", body)
+
+    def test_no_or_wrong_token_or_host_writes_nothing(self):
+        body = b'{"include_logs": false}'
+        refused = "refused: use http://127.0.0.1:" + str(self.port)
+        for options in [{"token": None}, {"token": "wrong"}, {"host": "evil.example:80"}]:
+            with self.subTest(options=options), \
+                    mock.patch.object(notebook, "write_export") as write:
+                status, text, content_type = self.post(body, **options)
+                self.assertEqual((status, text), (403, refused))
+                write.assert_not_called()
+        self.assertEqual(self.zips(), [])
+
+    def test_get_export_is_not_a_route(self):
+        status, text = self.send("GET", "/export", self.good_host())
+        self.assertEqual(status, 404)
+        self.assertEqual(self.zips(), [])
+
+    def test_same_second_export_is_a_409(self):
+        with mock.patch.object(notebook, "export_file_name",
+                               lambda name, now: "cptc-export-alice-20261107T103000.zip"):
+            first = self.export(False)["path"]
+            before = Path(first).read_bytes()
+            status, text, content_type = self.post(b'{"include_logs": false}')
+        self.assertEqual((status, text), (409, "not exported: an export named "
+                                          "cptc-export-alice-20261107T103000.zip already exists;"
+                                          " try again in a second"))
+        self.assertEqual(Path(first).read_bytes(), before)
+
+    def test_a_refused_root_is_a_403(self):
+        # LOGDIR set to the working copy itself: the root is then read-only.
+        self.server.settings["logdir"] = self.root.resolve()
+        status, text, content_type = self.post(b'{"include_logs": false}')
+        self.assertEqual(status, 403)
+        self.assertTrue(text.startswith("refused: the log folder is read-only, not writing: "), text)
+        self.assertEqual(self.zips(), [])
+
+    def test_a_write_failure_is_a_500_with_no_zip(self):
+        with mock.patch.object(notebook, "add_zip_file", side_effect=OSError("disk full")):
+            self.assert_not_exported(500, "not exported: disk full", b'{"include_logs": false}')
+
+
+class ExportPageTests(ServerTestCase):
+    """N5-03: the page's Export view. Display safety is PageSafetyTests' (NT4-06)."""
+
+    def get_page(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        return page
+
+    def test_export_button_opens_the_export_view(self):
+        page = self.get_page()
+        self.assertIn('document.getElementById("export-button").addEventListener("click", function () {\n'
+                      "  goTo(showExport);\n});", page)
+        self.assertEqual(page.count("export-button"), 2)
+
+    def test_include_logs_starts_unticked_with_its_warning(self):
+        page = self.get_page()
+        self.assertIn('logs.type = "checkbox";\n  /* Off every time the view opens (Export (a)). */\n'
+                      "  logs.checked = false;", page)
+        self.assertIn('label.appendChild(element("span", "Include logs"));', page)
+        self.assertIn('main.appendChild(element("p", "Logs are large and may contain secrets such as " +\n'
+                      '    "passwords and keys. Only include them when your team needs them."));', page)
+
+    def test_the_request_carries_only_the_box(self):
+        page = self.get_page()
+        self.assertIn('fetch("/export", {\n      method: "POST",', page)
+        self.assertIn("body: JSON.stringify({include_logs: logs.checked})", page)
+
+    def test_the_saved_path_and_every_left_out_file_show(self):
+        page = self.get_page()
+        self.assertIn('status.appendChild(element("p", "Saved " + result.path));', page)
+        self.assertIn('if (result.skipped.length > 0) {\n'
+                      '          status.appendChild(element("p", "Left out of the zip:"));', page)
+        self.assertIn("result.skipped.forEach(function (line) {\n"
+                      '          status.appendChild(element("p", line));', page)
+
+    def test_a_failure_shows_its_text_and_unlocks_the_button(self):
+        page = self.get_page()
+        self.assertIn("make.disabled = true;", page)
+        self.assertIn("function notMade(text) {\n      make.disabled = false;\n"
+                      '      status.appendChild(element("p", text));', page)
+        self.assertIn("return response.text().then(notMade);", page)
+        self.assertIn('notMade("Not exported: " + error);', page)
 
 
 if __name__ == "__main__":

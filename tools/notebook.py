@@ -11,13 +11,17 @@ marker regex; compile.py imports nothing from here.
 """
 
 import argparse
+import datetime
 import html
 import json
 import os
 import re
 import secrets
+import shutil
+import stat
 import sys
 import tempfile
+import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -1599,6 +1603,297 @@ def save_file(handler):
                              "warnings": warnings})
 
 
+def export_folders(name):
+    """Return the folders the zip export takes, relative to the root.
+
+    The person's own files, laid out like incoming/<name>/ on a teammate's
+    box (R18): never incoming/ itself, other people's field notes, or
+    anything else in the root.
+    """
+    return ["findings", "evidence", "field-notes/" + name, "tracker"]
+
+
+def folder_id(path):
+    """Return (device, inode) of the folder at path, following links, or None."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return (info.st_dev, info.st_ino)
+
+
+def add_export_entry(path, member, members, skipped, log_folder):
+    """Add the file at path, or every file below the folder at path, to members.
+
+    member is its name in the zip. A symlink is never followed or stored,
+    wherever it points (OQ-12); it goes into skipped, as does anything that
+    is neither a file nor a folder, or can't be read. log_folder is the log
+    folder's folder_id(), or None: that folder is skipped too. A missing
+    path adds nothing.
+    """
+    try:
+        # lstat() looks at a link itself, not its target, so a broken link
+        # or a link loop is skipped like any other link instead of hanging.
+        info = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        # Gone since its folder was listed.
+        return
+    except OSError as error:
+        skipped.append("not exported: can't read: " + member + " (" + str(error) + ")")
+        return
+    if stat.S_ISLNK(info.st_mode):
+        skipped.append("not exported: symlink: " + member)
+    elif stat.S_ISDIR(info.st_mode):
+        if (info.st_dev, info.st_ino) == log_folder:
+            # $LOGDIR kept inside e.g. evidence/: logs may hold secrets, so
+            # they go in the zip only as logs/, and only when asked for.
+            skipped.append("not exported: the log folder: " + member)
+            return
+        try:
+            names = sorted(os.listdir(path))
+        except OSError as error:
+            # An unreadable folder must not stop the rest of the export.
+            skipped.append("not exported: can't read: " + member + " (" + str(error) + ")")
+            return
+        for entry in names:
+            add_export_entry(path / entry, member + "/" + entry, members, skipped, log_folder)
+    elif stat.S_ISREG(info.st_mode):
+        members.append((member, path))
+    else:
+        # A FIFO or device is never opened: reading a FIFO can block forever.
+        skipped.append("not exported: not a regular file: " + member)
+
+
+def export_folder_ok(path, member, skipped):
+    """Return True if path is a real folder (not a link) to export from.
+
+    Anything else in its place is added to skipped with the reason: in the
+    zip a file there would not give the mirror layout. A missing folder
+    just gives False.
+    """
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        skipped.append("not exported: can't read: " + member + " (" + str(error) + ")")
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        skipped.append("not exported: symlink: " + member)
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        skipped.append("not exported: not a folder: " + member)
+        return False
+    return True
+
+
+def export_manifest(root, logdir, name, include_logs=False):
+    """Return (members, skipped) for the zip export.
+
+    members: (name in the zip, file path) for every regular file in the
+    export folders, plus everything in the log folder under logs/ when
+    include_logs is true. Ordered by folder, then by name, so it never
+    depends on the disk.
+    skipped: one "not exported: ..." line per symlink or other entry left
+    out; the rest is still exported (DECISIONS 2026-10-30 Chunk N6 E1).
+    """
+    members = []
+    skipped = []
+    root = Path(root)
+    log_folder = folder_id(logdir)
+    for folder in export_folders(name):
+        parent = folder.split("/")[0]
+        # field-notes/ is checked before field-notes/<name>, so a link there
+        # is never read through.
+        if parent != folder and not export_folder_ok(root / parent, parent, skipped):
+            continue
+        if export_folder_ok(root / folder, folder, skipped):
+            add_export_entry(root / folder, folder, members, skipped, log_folder)
+    if include_logs and export_folder_ok(Path(logdir), "logs", skipped):
+        # Every file in the log folder, with no size limit (DECISIONS
+        # 2026-10-30 Chunk N6 E2). Named logs/..., never by its path on this box.
+        add_export_entry(Path(logdir), "logs", members, skipped, None)
+    return members, skipped
+
+
+def export_file_name(name, now):
+    """Return the zip's file name, e.g. cptc-export-alice-20261107T101500.zip.
+
+    name is --name, already a slug (name_option()); now is a datetime.
+    """
+    return "cptc-export-" + name + "-" + now.strftime("%Y%m%dT%H%M%S") + ".zip"
+
+
+def zip_name_problem(member):
+    """Return why member can't be a name in the zip, or None if it can."""
+    if "\\" in member:
+        # Some unzip tools (Windows ones, Python's own there) take a
+        # backslash as a folder separator, so the file could land outside
+        # the mirror layout.
+        return "name has a backslash"
+    try:
+        member.encode("utf-8")
+    except UnicodeEncodeError:
+        # A file name with bytes that aren't UTF-8 (possible on Linux):
+        # zipfile can't store it.
+        return "name isn't UTF-8"
+    return None
+
+
+# The first and last times a zip can hold (it keeps seconds in steps of 2).
+ZIP_EARLIEST = (1980, 1, 1, 0, 0, 0)
+ZIP_LATEST = (2107, 12, 31, 23, 59, 58)
+
+
+def zip_time(seconds):
+    """Return a file time as the zip's (year, month, day, hour, minute, second).
+
+    A time the zip can't hold becomes its first or last one, so a file with
+    a wrong date (e.g. copied with its times from a box with a bad clock)
+    is still exported.
+    """
+    try:
+        moment = datetime.datetime.fromtimestamp(seconds).timetuple()[:6]
+    except (OverflowError, ValueError, OSError):
+        # Beyond what this computer's clock functions handle (past year 9999).
+        return ZIP_EARLIEST if seconds < 0 else ZIP_LATEST
+    return min(max(moment, ZIP_EARLIEST), ZIP_LATEST)
+
+
+def add_zip_file(archive, member, path, skipped):
+    """Copy the file at path into archive as member, unless it changed into something else.
+
+    The file was a plain file when export_manifest() looked; if it is a
+    symlink or not a regular file by now, or can't be read, it is skipped
+    and added to skipped instead.
+    """
+    try:
+        # O_NOFOLLOW: a file swapped for a symlink since the manifest is
+        # refused, not followed (OQ-12). O_NONBLOCK: one swapped for a FIFO
+        # can't make open() wait forever; it changes nothing for a plain file.
+        handle = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if os.path.islink(path):
+            # Reported like the links the manifest found (E1).
+            skipped.append("not exported: symlink: " + member)
+        else:
+            skipped.append("not exported: can't read: " + member + " (" + str(error) + ")")
+        return
+    with os.fdopen(handle, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            skipped.append("not exported: not a regular file: " + member)
+            return
+        entry = zipfile.ZipInfo(member, date_time=zip_time(info.st_mtime))
+        entry.compress_type = zipfile.ZIP_DEFLATED
+        # Copied in chunks, so a large log is never read into memory whole.
+        # force_zip64: the large-file format (zip64) from the start, so a log
+        # that grows past 2 GB while it is copied still fits; zipfile would
+        # otherwise stop with an error. Info-ZIP unzip 6.0 reads zip64.
+        with archive.open(entry, "w", force_zip64=True) as target:
+            shutil.copyfileobj(source, target)
+
+
+def write_export(root, logdir, name, include_logs=False, now=None):
+    """Write the export zip to the root; return (its path, skipped).
+
+    Members come from export_manifest(); skipped lists every file left out,
+    with the reason. Raises FileExistsError if a file of that name is
+    already there (never overwritten), compile.RootError if the root path
+    is refused, and OSError if the zip can't be written. A failed write
+    leaves no zip.
+    """
+    members, skipped = export_manifest(root, logdir, name, include_logs)
+    file_name = export_file_name(name, now or datetime.datetime.now())
+    # The same check as every other write: inside the root, not incoming/ or
+    # the log folder.
+    writable_path(root, logdir, file_name)
+    # The name itself, not what writable_path() resolved it to: a link
+    # already named like the export (even one to a file that doesn't exist
+    # yet) must stop it, not send the zip to wherever the link points.
+    path = Path(root) / file_name
+    taken = "an export named " + file_name + " already exists; try again in a second"
+    if os.path.lexists(str(path)):
+        # Two exports in the same second: the first one is kept as it is.
+        # Checked first, so a big zip isn't written only to be thrown away.
+        raise FileExistsError(taken)
+    # Written to a new temp file beside it, then given its name, so a
+    # half-written zip never carries the export's name. The temp name doesn't
+    # match cptc-export-*.zip, and the root itself is never exported.
+    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".cptc-export-", suffix=".part")
+    try:
+        with os.fdopen(handle, "wb") as temp:
+            with zipfile.ZipFile(temp, "w") as archive:
+                # The four folders (and logs/) are always there, even empty,
+                # so unzipping gives the whole mirror layout. A name ending
+                # in "/" is stored as a folder.
+                for folder in export_folders(name) + (["logs"] if include_logs else []):
+                    archive.writestr(folder + "/", b"")
+                for member, source in members:
+                    problem = zip_name_problem(member)
+                    if problem:
+                        skipped.append("not exported: " + problem + ": " + member)
+                    else:
+                        add_zip_file(archive, member, source, skipped)
+        # os.link() gives the zip its name but, unlike a rename, never
+        # replaces a file: one that appeared under that name meanwhile is kept.
+        os.link(temp_name, str(path))
+    except FileExistsError:
+        os.unlink(temp_name)
+        raise FileExistsError(taken)
+    except BaseException:
+        # Our own temp file only.
+        os.unlink(temp_name)
+        raise
+    # The zip has its name now; the temp name was a second name for it.
+    os.unlink(temp_name)
+    return path, skipped
+
+
+MAX_EXPORT_BYTES = 1024
+
+
+def read_export_request(handler):
+    """Return include_logs from an export POST's JSON body, or None after sending a 400."""
+    length = handler.headers.get("Content-Length", "")
+    if not (length.isascii() and length.isdigit()) or int(length) > MAX_EXPORT_BYTES:
+        send_text(handler, 400, "send the export choice as JSON, at most " + str(MAX_EXPORT_BYTES) + " bytes")
+        return None
+    try:
+        request = json.loads(handler.rfile.read(int(length)).decode("utf-8"))
+    except ValueError:
+        request = None
+    # Exactly this one field, and a real true or false: a missing or
+    # misspelt field is refused, so logs are never put in by a guess.
+    if (not isinstance(request, dict) or set(request) != {"include_logs"}
+            or not isinstance(request["include_logs"], bool)):
+        send_text(handler, 400, 'send {"include_logs": true or false}')
+        return None
+    return request["include_logs"]
+
+
+def save_export(handler):
+    """POST /export: write the export zip to the root; answer with its path and what was left out."""
+    include_logs = read_export_request(handler)
+    if include_logs is None:
+        return
+    settings = handler.server.settings
+    try:
+        path, skipped = write_export(settings["root"], settings["logdir"], settings["name"], include_logs)
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    except FileExistsError as error:
+        # Before OSError, which it is a kind of: the earlier zip is kept.
+        send_text(handler, 409, "not exported: " + str(error))
+        return
+    except OSError as error:
+        # write_export() has removed its temp file.
+        send_text(handler, 500, "not exported: " + str(error))
+        return
+    send_json(handler, 200, {"path": str(path), "skipped": skipped})
+
+
 # Where send_page() puts this run's token in the page.
 TOKEN_SLOT = "CPTC_TOKEN_SLOT"
 
@@ -1644,6 +1939,7 @@ form div { margin-bottom: 0.5rem; }
 <div id="file-list"></div>
 <button type="button" id="new-button">New</button>
 <button type="button" id="checklists-button">Checklists</button>
+<button type="button" id="export-button">Export</button>
 </nav>
 <main id="main"></main>
 </div>
@@ -1925,6 +2221,62 @@ function showNewForm(data) {
       });
     }).catch(function (error) {
       notCreated("Not created: " + error);
+    });
+  });
+}
+
+/* The Export view (Export (a)): one zip of the person's own files, saved
+   in the working copy, for a teammate to unzip in incoming/<name>/. */
+function showExport() {
+  main.textContent = "";
+  main.appendChild(element("h2", "Export"));
+  main.appendChild(element("p", "Makes one zip of your findings/, evidence/, tracker/ and " +
+    "field-notes/<your name>/, saved in your working copy. A teammate unzips it " +
+    "inside their incoming/<your name>/. Symlinks are never put in it."));
+  var logs = element("input");
+  logs.type = "checkbox";
+  /* Off every time the view opens (Export (a)). */
+  logs.checked = false;
+  var label = element("label");
+  label.appendChild(logs);
+  label.appendChild(element("span", "Include logs"));
+  main.appendChild(element("div")).appendChild(label);
+  main.appendChild(element("p", "Logs are large and may contain secrets such as " +
+    "passwords and keys. Only include them when your team needs them."));
+  var make = element("button", "Make the zip");
+  make.type = "button";
+  main.appendChild(element("div")).appendChild(make);
+  var status = main.appendChild(element("div"));
+
+  make.addEventListener("click", function () {
+    /* Locked until the answer, so one click makes at most one zip. */
+    make.disabled = true;
+    status.textContent = "";
+    function notMade(text) {
+      make.disabled = false;
+      status.appendChild(element("p", text));
+    }
+    fetch("/export", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-CPTC-Token": TOKEN},
+      body: JSON.stringify({include_logs: logs.checked})
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(notMade);
+      }
+      return response.json().then(function (result) {
+        make.disabled = false;
+        status.appendChild(element("p", "Saved " + result.path));
+        /* The zip is still made without them (DECISIONS 2026-10-30 Chunk N6 E1). */
+        if (result.skipped.length > 0) {
+          status.appendChild(element("p", "Left out of the zip:"));
+        }
+        result.skipped.forEach(function (line) {
+          status.appendChild(element("p", line));
+        });
+      });
+    }).catch(function (error) {
+      notMade("Not exported: " + error);
     });
   });
 }
@@ -2371,6 +2723,10 @@ document.getElementById("checklists-button").addEventListener("click", function 
   });
 });
 
+document.getElementById("export-button").addEventListener("click", function () {
+  goTo(showExport);
+});
+
 loadFiles();
 </script>
 </body>
@@ -2388,7 +2744,8 @@ GET_ROUTES = {"/": send_page,
               "/file": send_editable_file}
 POST_ROUTES = {"/checklist-state": save_tick,
                "/new-file": save_new_file,
-               "/file": save_file}
+               "/file": save_file,
+               "/export": save_export}
 
 
 class NotebookHandler(BaseHTTPRequestHandler):
