@@ -2,7 +2,7 @@
 
 Every block of `notebook.py`, its tests, and the related edits outside `tools/`. The test helpers in `tests/support.py` are shared with `compile.py` and are described in [compile-breakdown.md, section 2](compile-breakdown.md#2-test-helpers-testssupportpy). The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code after Chunk N4 (the fill-in back end: marker scanning, box types, format warnings, the Save step, and the routes that open and save a file: N4-01..N4-05, then the Chunk N4 review change D4, the stale-save check, and its re-review CR-1, no BOM written). Before it came Chunk N3 (the New form and the own-file list in the left column: N3-01..N3-05, then the Chunk N3 review changes CR-1 and D1, D2, D5), Chunk N2 (checklists and the own-file list route: N2-01..N2-05) and Chunk N1 (safety and shell: N1-01..N1-08, plus its review changes C-N1-01..C-N1-03). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code after Chunk N5 (the fill-in view on the page: N4-06..N4-09 with NT4-06 and NT4-07, plus the N5 decisions F1 C, F1d, F2, F3, F3a, F3b, F3c, F4 and L6, all DECISIONS 2026-10-29). Before it came Chunk N4 (the fill-in back end: marker scanning, box types, format warnings, the Save step, and the routes that open and save a file: N4-01..N4-05, then the Chunk N4 review change D4, the stale-save check, and its re-review CR-1, no BOM written), Chunk N3 (the New form and the own-file list in the left column: N3-01..N3-05, then the Chunk N3 review changes CR-1 and D1, D2, D5), Chunk N2 (checklists and the own-file list route: N2-01..N2-05) and Chunk N1 (safety and shell: N1-01..N1-08, plus its review changes C-N1-01..C-N1-03). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 | Term | Meaning |
 |---|---|
@@ -30,20 +30,25 @@ Line ranges match the code after Chunk N4 (the fill-in back end: marker scanning
 | plain marker / body | a plain marker has no colon (`[[HOST]]`); a `CHOOSE`, `TODO` or `NOTE` marker has a body, the text after its colon |
 | field | one marker as the fill-in view lists it: `{name, body, marker}`; a plain name is listed once |
 | control | what a field becomes: a one-line input, a multi-line textarea, a dropdown, or a NOTE shown as help |
-| fill-in view | the page that shows a box per marker above the file's whole text; Chunk N4 built its back end, the page itself is a later chunk |
+| fill-in view | the page that shows a box per marker above the file's whole text; Chunk N4 built its back end, Chunk N5 the page |
+| status line | `n markers left (k of them notes)` or `complete`, at the top of the fill-in view |
+| base | the file's text as the page last got it from the server; every save sends it back, and a file that no longer matches it gets the 409 (Chunk N4 D4) |
+| Save / autosave | Save puts the box values into the file (N4-07); autosave saves the textarea's text alone, 2 seconds after typing stops (N4-08) |
+| unsaved (boxes) | a box holding a value: not in the file until Save; shown as `unsaved` beside Save (N4-09) |
+| Reload / Your unsaved text | after a 409 ("changed on disk"), Reload shows the file as it is on disk and keeps the user's text and box values in a read-only box with a Copy button (N5 F1 C, F1d) |
 | own file | a `.md` file directly in `findings/` or `field-notes/<name>/`, as the left column lists it; the only files the fill-in view opens or saves |
 
 ## Size
 
-Measured after Chunk N4 and its review changes (Chunk N4 D4 and re-review CR-1), the same way as at Chunk N1 (that method gives N3's 946/265/238/183 on the N3 file).
+Measured after Chunk N5, the same way as at Chunk N1: docstring lines first, then blank lines, then lines starting `#` as comments, the rest as code. That method gives N4's 1190/384/275/229 on the N4 file. The `APP_PAGE` lines are counted the same way, so its blank lines count as blank and its CSS `#file-list` lines as comments.
 
-| Lines in `notebook.py` | Chunk N1 | Chunk N2 | Chunk N3 | Chunk N4 |
-|---|---|---|---|---|
-| code (the `APP_PAGE` included: 39, then 146, then 328 lines, unchanged at N4) | 190 | 481 | 946 | 1190 |
-| docstrings | 54 | 124 | 265 | 384 |
-| comments | 77 | 146 | 238 | 275 |
-| blank | 55 | 112 | 183 | 229 |
-| **total** | **376** | **863** | **1632** | **2078** |
+| Lines in `notebook.py` | Chunk N1 | Chunk N2 | Chunk N3 | Chunk N4 | Chunk N5 |
+|---|---|---|---|---|---|
+| code (the `APP_PAGE` included: 39, then 146, then 328 lines, unchanged at N4, 769 at N5) | 190 | 481 | 946 | 1190 | 1614 |
+| docstrings | 54 | 124 | 265 | 384 | 395 |
+| comments | 77 | 146 | 238 | 275 | 280 |
+| blank | 55 | 112 | 183 | 229 | 256 |
+| **total** | **376** | **863** | **1632** | **2078** | **2545** |
 
 **The size guideline is dropped (DECISIONS 2026-10-28 size, user A):** the notebook will always be bigger than about 700–800 lines, so size is no longer flagged. What matters is that every line can be explained (R4), which is what this file is for.
 
@@ -529,7 +534,14 @@ N4-02. Each `scan_markers()` field plus `"control"`: `note` (a NOTE, help only, 
 
 **Why a repeated name is sized by its first place:** that's where its one box shows. **Limit:** a body marker with another name (`[[FOO: x]]`) gets an input by size and no guidance; the spec defines only the four kinds, and no real template has one.
 
-### `FORMAT_RULES` + `DATE_RULE` + `TIME_RULE` + `LEFTOVER_WARNING` - lines 1261-1279
+### `marker_status()` - lines 1261-1271
+N4-06. The status line: `complete` when `listed_matches()` finds nothing, else `<n> markers left (<k> of them notes)`, n being every listed marker and k the NOTEs among them.
+
+**If Operations asks:** "It counts what the view shows: one box per name, plus every CHOOSE, TODO and NOTE, so the count matches the screen."
+
+**Decision (DECISIONS 2026-10-29 N5 F4, user A):** a `[[NAME]]` used three times counts once, as its one box. A file with only notes left is not `complete`. The wording is the spec's literally, so `1 markers left` stays as is (plain warnings, no wording code).
+
+### `FORMAT_RULES` + `DATE_RULE` + `TIME_RULE` + `LEFTOVER_WARNING` - lines 1274-1292
 N4-03's lookup table: marker name to `(regex, warning)`. `FINDING_ID` `F-[0-9]{3}`; `IR_ID` `IR-[0-9]{3}`; `CVSS_VECTOR` is compile.py's own `FULL_CVSS31_VECTOR_RE` (Chunk 3 CR-4, never copied); `CVSS_SCORE` `10\.0|[0-9]\.[0-9]`; `REFERENCE_URL` `http.*`; every name starting `DATE` or `TIME` gets `[0-9]{4}-[0-9]{2}-[0-9]{2}` or `[0-9]{2}:[0-9]{2}`.
 
 **If Operations asks:** "A small table of format checks by marker name, from the spec. A name not in it gets no check."
@@ -538,7 +550,7 @@ N4-03's lookup table: marker name to `(regex, warning)`. `FINDING_ID` `F-[0-9]{3
 
 **Limits:** DATE/TIME check the shape only, so `2026-13-45` and `99:99` pass; `REFERENCE_URL` is a literal, case-sensitive `http` start, so `httpfoo` passes and `HTTP://` warns.
 
-### `format_rule()` + `format_warnings()` - lines 1282-1309
+### `format_rule()` + `format_warnings()` - lines 1295-1322
 `format_rule()` finds a name's rule (the table, then the `DATE`/`TIME` prefixes). `format_warnings(name, value)`: the rule's warning if the value doesn't `fullmatch()`, plus `LEFTOVER_WARNING` when compile.py's own `LEFTOVER_RE` finds `[[` followed by a capital or `_` in the value. An empty value gets none.
 
 **⚠️ Spec departure (decided: DECISIONS 2026-10-29 Chunk N4 D3, user A; Chunk N4 CR-1):** the spec says to warn on "a value containing `[[`", but the warning says QA will report it, and QA's check is `LEFTOVER_RE`. So the warning fires only when `compile.LEFTOVER_RE` matches, the same object as QA (like `MARKER_RE` and `FULL_CVSS31_VECTOR_RE`): a pasted bash test (`if [[ -f /etc/shadow ]]; then ...`) in a REPRODUCTION_STEPS box gets none, and QA reports nothing for it either. Through the notebook fill-in only.
@@ -547,7 +559,7 @@ N4-03's lookup table: marker name to `(regex, warning)`. `FINDING_ID` `F-[0-9]{3
 
 **Why an empty value gets none:** an empty box leaves its marker in place, so a warning next to an untouched box would be noise. **Why `fullmatch()` on compile.py's regex:** its `$` also matches before a final newline; `fullmatch()` doesn't, so a vector with a typed newline warns. On every sample the notebook agrees with `FULL_CVSS31_VECTOR_RE.fullmatch()`.
 
-### `marker_targets()` - lines 1312-1352
+### `marker_targets()` - lines 1325-1371
 N4-04. Where each filled box's value goes in the current text, as `{start offset: value}`, plus warnings. `fields` is the whole field list the boxes were made from, each with its `"value"`, so identical copies can be counted.
 
 | Field | Rule |
@@ -556,35 +568,37 @@ N4-04. Where each filled box's value goes in the current text, as `{start offset
 | a NOTE | never replaced; a value sent for it is ignored |
 | plain `[[NAME]]` | its value goes at every copy now in the text (`[[HOSTNAME]]` is a different marker) |
 | a body marker, the k-th of n identical copies when scanned | goes at the k-th copy now, only while the text still has exactly n |
-| gone from the text | `<marker> is no longer in the text: value not saved` |
-| a body marker now there M times, not N | `... is in the text M times, not N, so it can't be told apart: value not saved`; none replaced |
+| gone from the text | `<marker> is no longer in the text: value not saved: <value>` |
+| a body marker now there M times, not N | `... is in the text M times, not N, so it can't be told apart: value not saved: <value>`; none replaced |
 
 **If Operations asks:** "The writer may edit the text by hand before pressing Save, so each marker is found again where it is now. If we can't tell which copy is which, nothing is replaced and the box says why."
 
+**Decisions (DECISIONS 2026-10-29 N5 F3b and F3c, user A):** both "value not saved" warnings end with the value exactly as typed, untrimmed. After the Save the box is gone (F3b) or comes back empty (F3c), so the warning is where the writer copies the value back from. The page shows each warning in a `<pre>`, so a multi-line value keeps its lines.
+
 **Flags kept at the N4 review (DECISIONS 2026-10-29 Chunk N4 review; N4-04, notebook only):** (1) the changed-count refusal is ours; the spec says "keyed by position" but doesn't cover a changed count; (2) a whitespace-only value counts as filled ("exactly as typed"), so an accidental space replaces the marker; (3) an empty box whose marker is gone gives no warning; (4) a value sent for a NOTE is ignored.
 
-### `apply_marker_values()` - lines 1355-1373
+### `apply_marker_values()` - lines 1374-1392
 N4-04. Returns `(new text, warnings)`: one pass over the current text's markers swaps each target for its value, exactly as typed.
 
 **If Operations asks:** "No escaping, trimming or reformatting; everything outside the replaced markers stays byte for byte."
 
 **Why one pass:** an inserted value is never scanned again, so a value `[[PORT]]` stays as typed even when PORT also has a value (as N3-04's fill).
 
-### `editable_path()` - lines 1376-1388
+### `editable_path()` - lines 1395-1407
 N4-05. A path can be opened or saved only if `list_own_files()` lists it (N2-05): the `.md` files directly in `findings/` and `field-notes/<name>/`. The path is only compared with that list, never used to look at the disk.
 
 **If Operations asks:** "One check keeps out `notes/`, `templates/`, `checklists/`, `incoming/`, the logs, other people's folders, subfolders, other file types, folders, missing files, `..`, absolute paths, NUL bytes and links pointing outside."
 
 **Why the list:** it also keeps out a FIFO named `x.md` (not a regular file). A mutant that resolved the path instead hung the server opening one. **Limit:** a FIFO swapped in between the list check and the read could still block; a local, single-user tool.
 
-### `read_editable_file()` - lines 1391-1400
+### `read_editable_file()` - lines 1410-1419
 N4-05. The file's text through `compile.read_markdown()`.
 
 **If Operations asks:** "It reads the file exactly as compile.py does."
 
 **Decision (DECISIONS 2026-10-29 N4-05 BOM, user A):** a leading BOM is dropped: the textarea never shows it and a save writes the file without it, even one typed or pasted at the start of the text (`save_editable_file()`). Every other byte round-trips.
 
-### `refuse_linked_save()` - lines 1403-1420
+### `refuse_linked_save()` - lines 1422-1439
 N4-05. Refuses a save if any part of the path is a link (`findings`, or `field-notes` and `field-notes/<name>`, and the file itself), or if the file has another hard link. Reading still follows links inside the root, as the list does.
 
 **If Operations asks:** "Saving through a link would change the file it points to, for example a template or a teammate's finding."
@@ -593,7 +607,7 @@ N4-05. Refuses a save if any part of the path is a link (`findings`, or `field-n
 
 **Decision (DECISIONS 2026-10-29 Chunk N4 D2, user A):** a save refuses an in-root link at every level, folders included, plus a hard-linked file. Stricter than OQ-17, and it narrows the DECISIONS 2026-10-28 Chunk N2 CR-1 Limit for saves (a linked `field-notes/<name>` still writes the tick file).
 
-### `StaleError` + `STALE_MESSAGE` + `save_editable_file()` - lines 1423-1470
+### `StaleError` + `STALE_MESSAGE` + `save_editable_file()` - lines 1442-1489
 N4-05. Every check first (`editable_path()`, `writable_path()` from N1-04, `refuse_linked_save()`, the stale check, the text encoded as UTF-8), then a temp file beside it gets the bytes and the file's own mode, and one `os.replace()` swaps it in. Returns the text it wrote: any BOMs at the start are left out. `StaleError` and `STALE_MESSAGE` are the stale check's error and its text.
 
 **If Operations asks:** "The file is written all at once, so a crash never leaves half a file, and a refused save changes nothing."
@@ -606,20 +620,20 @@ N4-05. Every check first (`editable_path()`, `writable_path()` from N1-04, `refu
 
 **Why bytes:** `\r\n` and `\n` are written as they came. **Why encode first:** a lone surrogate from JSON (`"\ud800"`) can't be UTF-8, and is refused before anything is written. **Why `os.replace()`:** it replaces the name itself, never writing through what's there. **Limit:** a crash mid-save can leave a `.save-*` temp file beside it (not `.md`, so never listed).
 
-### `send_editable_file()` - lines 1473-1491
-N4-05. `GET /file?path=<own file>`: `{"path", "text", "fields"}`, the fields from `marker_controls()`. `text` is also the `base` the first save sends back (Chunk N4 D4). 400 unless exactly one path; 403 for a refused path; 500 for a file that isn't UTF-8 or can't be read.
+### `send_editable_file()` - lines 1492-1513
+N4-05. `GET /file?path=<own file>`: `{"path", "text", "fields", "status"}`, the fields from `marker_controls()`, the status from `marker_status()` (N4-06). `text` is also the `base` the first save sends back (Chunk N4 D4). 400 unless exactly one path; 403 for a refused path; 500 for a file that isn't UTF-8 or can't be read.
 
 **If Operations asks:** "It opens one of your own files and lists its boxes. It changes nothing."
 
-### `MAX_SAVE_BYTES` + `SAVE_FIELDS` + `SAVE_HINT` + `good_save_field()` + `read_save_request()` - lines 1494-1535
+### `MAX_SAVE_BYTES` + `SAVE_FIELDS` + `SAVE_HINT` + `good_save_field()` + `read_save_request()` - lines 1516-1557
 N4-05. A save's body: exactly `{"path", "text", "base", "fields"}`, path, text and base as text (a missing or non-text `base` is a 400, Chunk N4 D4), fields a list whose items each have `name` and `marker` as text, `body` text or `null`, and `value` text. Extra keys in a field (e.g. `control` from `GET /file`) are allowed and not used. A missing, non-numeric or over-4-MiB `Content-Length`, a body that isn't UTF-8 JSON, a short body (timeout) or any other shape gives a 400.
 
 **If Operations asks:** "Anything else is refused before a file is touched."
 
 **Flag kept at the N4 review (DECISIONS 2026-10-29 Chunk N4 review):** 4 MiB is a judgment call: enough for a finding with pasted log output.
 
-### `save_file()` - lines 1538-1575
-N4-05. `POST /file`: applies the boxes' values (`apply_marker_values()`), adds each filled non-NOTE box's format warnings as `<NAME>: <warning>`, saves, and answers `{"path", "text", "fields", "warnings"}` with the new text and its rescanned fields. That text, boxes applied, is the `base` for the next save. An empty `fields` list saves the text alone (for the textarea's autosave, N4-08).
+### `save_file()` - lines 1560-1599
+N4-05. `POST /file`: applies the boxes' values (`apply_marker_values()`), adds each filled non-NOTE box's format warnings as `<NAME>: <warning>`, saves, and answers `{"path", "text", "fields", "status", "warnings"}` with the new text, its rescanned fields and its status line (`status` added at N4-07). That text, boxes applied, is the `base` for the next save. An empty `fields` list saves the text alone (for the textarea's autosave, N4-08).
 
 | Problem | Answer |
 |---|---|
@@ -632,33 +646,40 @@ N4-05. `POST /file`: applies the boxes' values (`apply_marker_values()`), adds e
 
 **If Operations asks:** "This is the spec's Save: apply the boxes, write the file, rescan. Warnings never stop the save."
 
-**Decision (DECISIONS 2026-10-29 Chunk N4 D4, user A):** a save whose file changed on disk since it was opened gets the 409 and writes nothing; see `save_editable_file()`. Built before N5 builds the page on this request shape.
+**Decision (DECISIONS 2026-10-29 Chunk N4 D4, user A):** a save whose file changed on disk since it was opened gets the 409 and writes nothing; see `save_editable_file()`. The page (Chunk N5) is built on this request shape.
 
-### `TOKEN_SLOT` + `APP_PAGE` - lines 1578-1913
+**Decision (DECISIONS 2026-10-29 N5 F3, user A; F3a A):** the format warnings come only from here, with no copy of the rules in the page's script. The page lists them under the status line, each starting with its box's name: after a Save the filled box is gone, so there is no box left to show a warning beside.
+
+### `TOKEN_SLOT` + `APP_PAGE` - lines 1602-2378
 The one HTML page. The left column has the "Light / dark" button, the person's own files, a "New" button and a "Checklists" button; the main pane shows what was picked. Inline CSS and JS only. `send_page()` replaces `TOKEN_SLOT` with this run's token.
 
-**If Operations asks:** "Black on white, or white on black when your system is in dark mode; the button swaps them. The left column lists your own files. New opens a form to make a file from a template; Checklists lists the checklists, and picking one shows each task as a checkbox. There are no outside files or fonts, so it works with no internet."
+**If Operations asks:** "Black on white, or white on black when your system is in dark mode; the button swaps them. The left column lists your own files; clicking one opens it with a box for every marker and the whole file below, which saves itself as you type. New opens a form to make a file from a template; Checklists lists the checklists, and picking one shows each task as a checkbox. There are no outside files or fonts, so it works with no internet."
 
 | Part | Lines | What it does |
 |---|---|---|
-| `<meta name="cptc-token">` | 1556 | carries this run's token for the script |
-| `:root` and `@media (prefers-color-scheme: dark)` | 1593-1599 | follow the system's light or dark setting; the button's choice wins |
-| `body`, `.columns`, `nav`, `main`, buttons, `label input`, `pre` | 1600-1607 | spacing only; one `<pre>` per text line, and an empty line still takes up a line |
-| `#file-list div`, `#file-list .selected`, `form div` | 1608-1612 | the file list's spacing, long paths wrap; the file just created in bold; form row spacing |
-| `<nav>` | 1617-1622 | theme button, `div#file-list`, New, Checklists |
-| theme toggle | 1626-1633 | sets `data-theme` to the opposite of what shows now |
-| `element()` | 1638-1645 | makes an element and sets its text with `textContent` |
-| `showMessage()`, `getJson()` | 1647-1660 | fetch a JSON route; an error shows the server's text |
-| `showChecklistList()` | 1662-1676 | one button per checklist |
-| `showChecklist()` | 1678-1700 | each task a `label` holding an `input type=checkbox` and a `span`; each other line a `<pre>`; a status line for problems |
-| `saveTick()` | 1702-1730 | POSTs `{key, checked}` with `X-CPTC-Token`; the box is locked until the answer; if not saved, it goes back to its value from before the click and the reason shows |
-| `showFiles()` | 1732-1749 | each `/files` path as a line, in the order given (grouped by prefix); the selected one in bold; each refused reason as `Not listed: ...` |
-| `loadFiles()` | 1751-1764 | fetches `/files`; an error shows its text in the list |
-| `addField()` | 1766-1772 | one labelled control in its own row |
-| `showNewForm()` | 1774-1899 | the New form (below), with `refreshSuggestion()` |
-| New button | 1901-1903 | loads `/new-data`, then the form; an error shows the route's text instead |
-| Checklists button | 1905-1907 | loads the list |
-| `loadFiles();` | 1875 | the file list loads when the page opens |
+| `<meta name="cptc-token">` | 1614 | carries this run's token for the script |
+| `:root` and `@media (prefers-color-scheme: dark)` | 1617-1623 | follow the system's light or dark setting; the button's choice wins |
+| `body`, `.columns`, `nav`, `main`, buttons, `label input`, `pre` | 1624-1631 | spacing only; one `<pre>` per text line, and an empty line still takes up a line |
+| `#file-list div`, `#file-list button`, `#file-list .selected`, `form div` | 1632-1637 | the file list's spacing, long paths wrap (the file buttons too, N4-06); the file just created in bold; form row spacing |
+| `<nav>` | 1642-1647 | theme button, `div#file-list`, New, Checklists |
+| theme toggle | 1651-1658 | sets `data-theme` to the opposite of what shows now |
+| `element()` | 1663-1670 | makes an element and sets its text with `textContent` |
+| `showMessage()`, `getJson()` | 1672-1685 | fetch a JSON route; an error shows the server's text |
+| `showChecklistList()` | 1687-1701 | one button per checklist |
+| `showChecklist()` | 1703-1725 | each task a `label` holding an `input type=checkbox` and a `span`; each other line a `<pre>`; a status line for problems |
+| `saveTick()` | 1727-1755 | POSTs `{key, checked}` with `X-CPTC-Token`; the box is locked until the answer; if not saved, it goes back to its value from before the click and the reason shows |
+| `showFiles()` | 1759-1780 | each `/files` path as a button, in the order given (grouped by prefix); clicking one opens it in the fill-in view through `goTo()` (N4-06); the file just created in bold; each refused reason as `Not listed: ...` |
+| `loadFiles()` | 1782-1795 | fetches `/files`; an error shows its text in the list |
+| `addField()` | 1797-1803 | one labelled control in its own row |
+| `showNewForm()` | 1805-1930 | the New form (below), with `refreshSuggestion()` |
+| `markerBox()` | 1932-1955 | N4-06: the box for one marker: a dropdown starting on "(not chosen)", a 4-row textarea, or a one-line input |
+| `AUTOSAVE_DELAY` | 1957-1958 | 2000 ms (N4-08) |
+| `openView` + `goTo()` | 1960-1975 | every move to another view (a file, New, Checklists) goes through the open file's `leave()` (N4-08 C7, N4-09) |
+| `beforeunload` | 1977-1986 | closing the tab, reloading or leaving the site warns while boxes hold values, or while the file's text can't be saved (N4-09, N5 L6) |
+| `showFillIn()` | 1988-2360 | the fill-in view (below) |
+| New button | 2362-2366 | through `goTo()`, loads `/new-data`, then the form; an error shows the route's text instead |
+| Checklists button | 2368-2372 | through `goTo()`, loads the list |
+| `loadFiles();` | 2374 | the file list loads when the page opens |
 
 **The New form (`showNewForm()`):**
 - **Title:** a one-line text box, so a title can't split the heading it goes into.
@@ -669,31 +690,82 @@ The one HTML page. The left column has the "Light / dark" button, the person's o
 
 There's no file name or path field anywhere: the notebook builds the name.
 
-**Why `textContent` everywhere, never `innerHTML`:** file names, titles, checklist text and refusal reasons (even `<script>`) only ever show as text; they can never become part of the page.
+**The fill-in view (`showFillIn(data, unsaved)`, N4-06..N4-09):** from top to bottom, the file's path, the status line, the messages, the leave row, "Your unsaved text" (after a Reload only), the boxes with Save and the `unsaved` indicator, the whole file in a 30-row textarea, and the "saved at" line. Its own state: `base`, `entries` (each field with its box; a NOTE has none), `timer`, `busy`, `stopped` (after a 409, or once the view is left), `failureShown`, `textSaved`, `afterSave`, `warningsShown`.
 
-**Why the box is locked while saving (N2-04 adversary round 1):** if a quick second click could change the box before the first save answered, a failed first save would flip the newer value and show the opposite of what's saved. The Create button is locked for the same reason, so one click makes at most one file.
+| Part | Lines | What it does |
+|---|---|---|
+| state | 1995-2018 | `base` is `data.text`, the text as the server sent it; registers `openView` |
+| layout | 2020-2043 | builds the parts above once; the file text goes in with `fileText.value = data.text` |
+| `showBoxes()` | 2045-2069 | the status line, then a row per field in order: a NOTE as highlighted help (`<pre><mark>`), never a box; any other field its `markerBox()` labelled with its name, a TODO's guidance under it; then Save and the indicator |
+| `lockBoxes()` | 2071-2079 | locks or unlocks every box (for a Save, N4-09 round 2) |
+| `showUnsavedMark()` | 2081-2085 | ` unsaved` beside Save while any box holds a value, else nothing |
+| `boxesHoldValues()` | 2087-2093 | true if any box's value isn't empty |
+| `unsavedText()` | 2095-2110 | the textarea's text, then each box value as `NAME: value`, one line each (N5 F1d) |
+| `showUnsaved()` | 2112-2130 | "Your unsaved text": a read-only textarea and a Copy button (`navigator.clipboard`); if copying fails, it says to select and copy by hand |
+| `offerReload()` | 2132-2160 | after a 409: stops autosave and shows Reload. Reload fetches `GET /file` and shows a fresh view with `unsavedText()` kept, but only if this view is still the open one (an answer arriving after the user left draws nothing, N4-09 round 3); a failed reload leaves the view as it is |
+| `holdsUnsaved()` | 2162-2166 | box values, or text not saved after a refusal (`stopped` or `failureShown`) until a save works or Reload: what the close-tab warning covers (N5 L6) |
+| `leave()` | 2168-2187 | waits first for a save on its way; if a Save comes back with warnings the page stays so they are seen, and the next click leaves (Chunk N5 CR-2). Then asks once (`window.confirm`) while boxes hold values; Cancel stays with everything as it was; OK goes on to `leaveText()`, which doesn't put the box values in the file |
+| `quit()` | 2189-2196 | leaving for good: `stopped`, the timer cleared, then the next view, so this view sends nothing more (Chunk N5 CR-1) |
+| `leaveText()` | 2198-2217 | saved text leaves at once (`quit()`); a stopped or failed one shows the leave row; otherwise it saves the text now, then decides again |
+| `offerLeave()` | 2219-2228 | "This file's text isn't saved, so the page stays here." and a "Leave without saving" button, which leaves through `quit()` |
+| `runAfterSave()` | 2230-2237 | runs what was waiting for the save on its way (e.g. finishing a leave) |
+| `post()` | 2239-2288 | the one save POST, Save's and autosave's: `{path, text, base, fields}` with `X-CPTC-Token`, Save locked while it's on its way. Success: the answer's text is the next `base`, and "saved at HH:MM:SS" only if the textarea still holds the text sent. Refusal: "Not saved: <server text>", and Reload for a 409 |
+| `autosave()` | 2290-2312 | the textarea's text alone (`fields` empty); waits if a save is on its way; a success clears an old failure line and rebuilds the boxes and status only while no box holds a value |
+| box listeners | 2314-2316 | typing in a box or picking from a dropdown updates the indicator |
+| textarea `input` | 2318-2326 | "not saved yet"; restarts the 2-second timer unless stopped |
+| Save button | 2328-2359 | clears the pending autosave; sends every field in scan order (a NOTE's value empty) with the textarea and the boxes locked; success puts the saved text in the textarea, rebuilds the boxes and shows "Saved." and each warning in a `<pre>`, and notes whether there were warnings (for `leave()`); a refusal unlocks both and keeps every value |
+
+**Why `textContent` everywhere, never `innerHTML`:** file names, titles, checklist text, refusal reasons, marker labels, guidance, notes and warnings (even `<script>`) only ever show as text; a file's text only ever goes into a textarea through `.value`. They can never become part of the page. One test checks this in the served page (`PageSafetyTests`, NT4-06).
+
+**Why the box is locked while saving (N2-04 adversary round 1):** if a quick second click could change the box before the first save answered, a failed first save would flip the newer value and show the opposite of what's saved. The Create button is locked for the same reason, so one click makes at most one file. The fill-in Save locks its boxes and the textarea for the same reason: its answer rebuilds them, so anything typed meanwhile would be lost (N4-09 round 2).
+
+**Why `base` is `data.text`, not the textarea's `.value`:** a browser turns `\r\n` into `\n` in a textarea's value, so a Windows file would never match on disk and every save would get the 409.
+
+**Why one save at a time (`busy`):** each save sends the `base` the last one left; two at once would send the same `base`, and the second would get a false 409.
+
+**Why leaving saves first (N4-08 adversary C7):** each view keeps its own timer. Before this, typing in A and opening B left A's autosave to run behind B, so a 409 for A showed in a view no longer on the page and A's text was lost. Now the page moves on once A's text is saved, or when the user picks "Leave without saving"; otherwise it stays on A with the reason and Reload.
+
+**Why a left view stops (Chunk N5 CR-1):** "Leave without saving" used to leave A's view able to autosave: typing after its leave row showed started a new timer, which saved A after the user had left it, and, with A reopened, gave the new view a false 409. Every way out now goes through `quit()`, which stops the view first.
+
+**Why leaving waits for a Save on its way (Chunk N5 CR-2):** the locked boxes still hold their values, so asking then would call values "lost" that the Save is writing, and leaving would drop its answer, including an F3b warning that carries a value to copy back. `leave()` decides once the answer is in, and a Save with warnings keeps the page here.
+
+**Decisions (DECISIONS 2026-10-29, and 2026-10-30 Chunk N5 review):**
+- **N5 F1, user C:** after a 409, autosave stops and the page offers Reload; Reload shows the disk version and keeps the user's text in "Your unsaved text", so nothing is lost even without copying first. **F1d, user A:** the box values go there too, one `NAME: value` line each.
+- **N5 F3, user A; F3a, A:** warnings come from the server only and are listed under the status line, each starting with its box's name (see `save_file()`).
+- **N5 F4, user A:** see `marker_status()`.
+- **⚠️ Spec departure, N5 L6, user A:** the close-tab warning also fires while the file's text can't be saved: after a 409 or another refused save, until a save works or Reload. The spec says the textarea has nothing to warn about because it autosaves, which stops being true then. Text only waiting for its autosave (2 seconds) still gets no warning. -> update `tools/BUILD-SPEC.md` Fill-in textarea at the next spec fold.
+- **⚠️ Spec departure, Chunk N5 review D1 (F-a), user A:** a dropdown starts on "(not chosen)", so an untouched dropdown leaves its marker in place on Save. The spec says "a dropdown of the options"; without the empty first choice a browser's dropdown always has a value, and Save would quietly write the first option. -> update `tools/BUILD-SPEC.md` Fill-in at the next spec fold.
+- **⚠️ Spec departure, Chunk N5 review D3 (F-d), user A:** a browser's textarea gives LF line endings only, so the first Save or autosave from the page turns a Windows (CRLF) file into LF. The spec's Fill-in Save says "nothing else in the file is touched". `base` comes from the server's text, so this never gives a false 409, and compile.py reads both the same. -> update `tools/BUILD-SPEC.md` Fill-in at the next spec fold.
+
+**N5 flag (notebook only):**
+- **F-b:** a CHOOSE or TODO box is labelled with its name ("CHOOSE", "TODO"); `finding.md`'s Severity and Status dropdowns are told apart only by their options. The F1d lines use the same labels.
+
+**Limits:**
+- **L2:** while any box holds a value, an autosave refreshes neither the boxes nor the status line, so the status can be out of date until Save.
+- **L4:** autosave sends no box values, so it never gives format warnings.
+- **L5:** after a failed save, leaving offers "Leave without saving" straight away rather than trying again; typing again retries through autosave.
+- **L7:** the browser decides the close-tab warning's wording, and may skip it if the page was never clicked or typed in.
+- "saved at" uses the browser's clock. The theme button's choice still isn't remembered after a reload, and a reload of the tab starts with an empty main pane: it doesn't reopen the file that was open (its saved text is on disk).
 
 **⚠️ Spec departure (decided: DECISIONS 2026-10-29 Chunk N3 D4, user A):** the file just created is shown in bold (`font-weight`). The spec says "no styling beyond spacing"; the selection needs to be visible, and bold was kept.
 
-**Limit:** a file in the list can't be opened on the page yet. Since Chunk N4, `GET /file` can read it; the page's fill-in view comes with N4-06 and later tasks.
+**Limit:** no unit test runs the script (Python has no built-in browser); the tests check the served page's text. At N2-04, N3-05 and at each N5 task the script was run in Node against a real notebook on 127.0.0.1, with a fake page whose `innerHTML`, `outerHTML` and `insertAdjacentHTML` raise an error and real timers. In N5 that covered: hostile file text, options, notes and guidance shown as text; Save with its warnings, rebuild and next `base`; a 409 and a link refusal keeping the boxes; the 2-second debounce; an edit made during a save; switching files with typing pending, with and without a 409 (C7); Reload with the kept text and box values and Copy; the indicator, the single leave warning, `beforeunload` (L6 included), locked boxes during a Save, and leaving after a failed save or during a Save (Chunk N5 CR-1, CR-2), and a Reload answering after the user left (N4-09 round 3). Those runs are not repo tests. Real typing, clipboard, the browser's own dialogs, timing in a real browser, layout and light/dark mode are for the user's browser check (D-04).
 
-**Limit:** no unit test runs the script (Python has no built-in browser); the tests check the served page's text. At N2-04 and again at N3-05 the script was run in Node against a real notebook on 127.0.0.1, with a fake page whose `innerHTML`, `outerHTML` and `insertAdjacentHTML` raise an error. At N3-05 all 25 checks passed, and after Chunk N3 CR-1 all 32: the file list, its refusals, a `<script>` file name shown as text, the five type options in order, which fields show for each type, the library title filling the Title box, create and the list reloading with the new file selected, a failed create keeping the form, an old number not sent after switching type, two incident reports in a row getting 005 then 006 (and an emptied box when the refresh fails), the IR-999 note, and Checklists and the theme toggle still working afterwards. That run is not a repo test. The layout, light and dark mode, real clicking and keyboard use, and real browser form behaviour are for the manual browser check (D-04). The theme button's choice still isn't remembered after a reload.
-
-### `GET_ROUTES` + `POST_ROUTES` - lines 1915-1926
+### `GET_ROUTES` + `POST_ROUTES` - lines 2380-2391
 Which function answers which URL. GET: `/`, `/checklists`, `/checklist`, `/checklist-view`, `/files`, `/new-data`, `/file`. POST: `/checklist-state`, `/new-file`, `/file`.
 
 **If Operations asks:** "A list of the URLs the notebook answers. GET routes never change anything; the three routes that save are POSTs, and every POST needs the token."
 
-### `NotebookHandler` - lines 1929-1974
+### `NotebookHandler` - lines 2394-2441
 Answers each GET and POST: the guard first, then the route. Any other method gets the server's 501.
 
 | Part | Lines | What it does |
 |---|---|---|
-| `timeout = 10` | 1932-1935 | a connection waiting longer than 10 seconds for more of its request is closed (N3-05) |
-| `do_GET()` / `do_POST()` | 1937-1941 | send GET and POST through `answer()` with their routes |
-| `answer()` | 1943-1960 | closes the connection after this one request; the guard runs before the body is read or any route runs, so a refused POST changes nothing; then the route is found by the path without its `?query` (Chunk N2); 404 for an unknown path |
-| `send_error()` | 1962-1971 | the server's own errors (e.g. 501 for any other method, 431 for too many headers) go out as text with the safety headers instead of as an HTML page, and close the connection |
-| `log_message()` | 1973-1974 | prints nothing per request, so the terminal stays readable |
+| `timeout = 2` | 2397-2402 | a connection waiting longer than 2 seconds for more of its request is closed (N3-05; 2 s since N5 F2) |
+| `do_GET()` / `do_POST()` | 2404-2408 | send GET and POST through `answer()` with their routes |
+| `answer()` | 2410-2427 | closes the connection after this one request; the guard runs before the body is read or any route runs, so a refused POST changes nothing; then the route is found by the path without its `?query` (Chunk N2); 404 for an unknown path |
+| `send_error()` | 2429-2438 | the server's own errors (e.g. 501 for any other method, 431 for too many headers) go out as text with the safety headers instead of as an HTML page, and close the connection |
+| `log_message()` | 2440-2441 | prints nothing per request, so the terminal stays readable |
 
 **If Operations asks:** "Every GET and POST goes through the guard before any route runs. Any other method, like PUT, gets a plain 'not implemented' (501) and nothing runs. Each connection carries only one request."
 
@@ -703,34 +775,36 @@ Answers each GET and POST: the guard first, then the route. Any other method get
 
 **Why a timeout (N3-05, adversary case 7):** the server answers one request at a time. Without it (Python's default is no limit), a request whose body is shorter than its `Content-Length` would hold the whole notebook forever. It covers the tick route too.
 
+**Decision (DECISIONS 2026-10-29 N5 F2, user A):** 2 seconds, down from 10. A browser can open a connection early and leave it idle; while it waits, every other request waits too (it stalled `GET /files` for the full timeout in an N3 probe). The server still answers one request at a time, so saves can't collide. The user ran the Firefox-on-Kali check with Hearth on 2026-10-30 on origin/main 8d63d31 (timeout 10 s) and found no issues; Hearth reruns it on N5 (2 s) after the merge.
+
 **Limit:** the server's own errors (400 for a bad request line, 414 for a too-long URL, 431 for too many headers, 501 for another method) are answered without the guard; no route runs and nothing changes. A request whose first line it can't parse at all gets an old-style answer with no headers, only the error text. A browser can't send such a request.
 
-### `parse_args()` - lines 1977-1999
+### `parse_args()` - lines 2444-2466
 `--name` (required), `--root` (default `~/cptc-work`), `--port` (default 8765). There is deliberately no option for the address.
 
 **If Operations asks:** "There's no setting that could open the notebook to the network: it's always 127.0.0.1. The root defaults to the working copy, never the current folder, for the same reason as `compile.py`."
 
-### `port_option()` - lines 2002-2008
+### `port_option()` - lines 2469-2475
 `--port` must be 1–65535, written in ASCII digits; otherwise argparse prints a readable error.
 
 **If Operations asks:** "A bad port gives a clear message instead of a crash."
 
-### `log_dir()` - lines 2011-2016
+### `log_dir()` - lines 2478-2483
 `$LOGDIR`, or `~/cptc-logs` if it isn't set or is empty.
 
 **If Operations asks:** "The same rule as our logging script, so the notebook looks where the logs were written."
 
-### `load_settings()` - lines 2019-2032
+### `load_settings()` - lines 2486-2499
 Reads the options and checks the root with `compile.validate_root()`: it must exist, be a folder and have no `.git`.
 
 **If Operations asks:** "The folder check runs before the server exists, so the notebook refuses to start in a folder that has its own `.git`, like our git clone."
 
-### `make_server()` - lines 2035-2044
+### `make_server()` - lines 2502-2511
 Creates the server on the literal `("127.0.0.1", port)`, with a new token and the settings.
 
 **If Operations asks:** "Literally 127.0.0.1: not empty or `0.0.0.0`, which would mean every network interface, and not `localhost`, a name the system looks up. Other boxes on the network can't reach it."
 
-### `main()` + `if __name__ == "__main__"` - lines 2047-2078
+### `main()` + `if __name__ == "__main__"` - lines 2514-2545
 Root check, then the server. Prints `Notebook: http://127.0.0.1:<port>` and a local-only reminder, then serves until Ctrl+C.
 
 **If Operations asks:** "If the folder is refused or the port is taken, it prints one readable line and exits with code 2. Ctrl+C stops it cleanly with exit code 0, and the server is always closed."
@@ -748,19 +822,19 @@ Shared with `compile.py`'s tests. See [compile-breakdown.md, section 2](compile-
 
 ### tests/test_notebook.py
 
-#### Imports - lines 1-22
+#### Imports - lines 1-23
 `support` is imported first so `notebook` and `compile` can be found. `ast` reads `notebook.py`'s source for `ModuleSafetyTests`. `os` reads links and folders for `tree()` and makes a hard link; `string` reads a path pattern's slots (Chunk N3). Chunk N4 added `shutil` (replaces a folder with a link) and `stat` (checks a FIFO is still a FIFO). `http.client`, `socket`, `threading` and `HTTPServer` are for the tests that run a real server on 127.0.0.1; `HTMLParser` reads the app page; `quote` builds `?path=` URLs.
 
 **If Operations asks:** "Standard library only, like the tools."
 
-#### `StartupTests` - lines 25-53
+#### `StartupTests` - lines 26-54
 - a root with `.git` exits with code 2 and the message; no server is created (`HTTPServer` patched and checked) and no file is created
 - `--host`, `--bind`, `--address` and `--listen` don't exist
 - `--port` refuses `0`, `65536`, `-1`, `abc` and an Arabic-Indic digit; accepts `9000`
 
 **If Operations asks:** "Starting in the git clone is refused before anything happens, and there's no option to open the notebook to the network."
 
-#### `ServeTests` - lines 56-110
+#### `ServeTests` - lines 57-111
 - `main()` with a fake server: it is created with exactly `("127.0.0.1", 9123)`, gets a 43+ character token and the settings, the URL and "Local only" are printed, and the server is closed
 - a real server listens on `127.0.0.1` with our handler, and each server gets its own token
 - a port already in use gives exit code 2 and a readable message (the test can't hang, even if the code broke)
@@ -768,7 +842,7 @@ Shared with `compile.py`'s tests. See [compile-breakdown.md, section 2](compile-
 
 **If Operations asks:** "These prove the notebook only listens on this computer and tells you the right address."
 
-#### `ModuleSafetyTests` - lines 113-142
+#### `ModuleSafetyTests` - lines 114-143
 Constraint 3, tested the same way as `compile.py`'s (DECISIONS 2026-10-27 Chunk N1 D2, user A). Both tests read `notebook.py`'s source with `ast`, without running it.
 - the imports are exactly `argparse`, `html`, `json`, `os`, `re`, `secrets`, `sys`, `tempfile`, `http.server`, `pathlib`, `urllib.parse` and `compile` (`os` for `$LOGDIR` and the tick state's safe write)
 - no name `subprocess`, `system`, `popen`, `Popen`, `exec` or `eval` appears anywhere, imported names included
@@ -779,7 +853,7 @@ Constraint 3, tested the same way as `compile.py`'s (DECISIONS 2026-10-27 Chunk 
 
 **Why imported names too:** `from os import popen` imports module `os`, which is allowed, so the import test alone misses it. `compile.py`'s matching test doesn't collect imported names; there `os` isn't allowed at all, so the import test catches it.
 
-#### `SlugifyTests` - lines 145-160
+#### `SlugifyTests` - lines 146-161
 - the spec's example `" ../A  B!! "` gives `a-b`
 - end and repeated hyphens disappear
 - at most 40 characters, with no hyphen left at the cut
@@ -787,19 +861,19 @@ Constraint 3, tested the same way as `compile.py`'s (DECISIONS 2026-10-27 Chunk 
 
 **If Operations asks:** "Every way a title could produce a bad file name is turned into a safe one, or refused."
 
-#### `ValidateNnnTests` - lines 163-172
+#### `ValidateNnnTests` - lines 164-173
 - `000` and `999` pass
 - `1`, `01`, `1000`, `abc`, `"123\n"` and Arabic-Indic digits fail
 
 **If Operations asks:** "Only exactly three ordinary digits are accepted."
 
-#### `NameOptionTests` - lines 175-181
+#### `NameOptionTests` - lines 176-182
 - `"Alice Smith"` becomes `alice-smith`
 - `"../"` is refused with an argparse error
 
 **If Operations asks:** "Your name is cleaned like a title, and a name that can't be cleaned is refused."
 
-#### `PathWrapperTests` - lines 184-280
+#### `PathWrapperTests` - lines 185-281
 `setUp` builds a root with `findings/` and `incoming/bob/`, a log folder, and an "outside" folder, all in `.tmp/`. Every refusal checks the path is named in the error.
 
 | Allowed | Refused |
@@ -813,10 +887,10 @@ Constraint 3, tested the same way as `compile.py`'s (DECISIONS 2026-10-27 Chunk 
 
 **If Operations asks:** "We tried every way to read or write outside the allowed folders, including symlink tricks. Each is refused and the error names the path."
 
-#### `file_bytes()` - lines 283-286
+#### `file_bytes()` - lines 284-287
 Every file under a folder as `{path: bytes}`, compared before and after to prove nothing changed.
 
-#### `ServerTestCase` - lines 289-365
+#### `ServerTestCase` - lines 290-366
 The shared setup for the server tests; it has no tests of its own. Each test gets a real server on `127.0.0.1` with a free port, in a thread, shut down and closed when the test ends.
 
 | Helper | What it does |
@@ -829,7 +903,7 @@ The shared setup for the server tests; it has no tests of its own. Each test get
 
 **Why fake routes:** they keep the guard tests independent of any feature: a fake POST that changes a file proves a refused POST changes nothing.
 
-#### `RequestGuardTests` - lines 368-478
+#### `RequestGuardTests` - lines 369-479
 - refused (403, nothing ran, nothing changed): a wrong Host, `localhost`, a Host without a port, a second Host header, a wrong Host even with the right token, a POST with no token, a wrong token, a non-ASCII token
 - the exact Host GET and the exact Host plus token POST both work
 - PUT, OPTIONS, HEAD and a made-up `BREW` get a plain-text 501 with nosniff and DENY, with either Host; no route runs and nothing changes (Chunk N1 D3)
@@ -842,7 +916,7 @@ The shared setup for the server tests; it has no tests of its own. Each test get
 
 **Helper:** `send_with_smuggled_get()` sends one raw request with a wrong Host whose body is a whole GET with the right Host, on a server switched to HTTP/1.1, and returns everything that comes back.
 
-#### `ResponseHeaderTests` - lines 481-551
+#### `ResponseHeaderTests` - lines 482-552
 - every real route: only `/` is HTML, everything else is JSON or plain text, and all have nosniff and DENY (since Chunk N2 this includes the five checklist and file routes, and since Chunk N3 `/new-data` and `/new-file`, sent with no `?path=` and an empty POST body)
 - JSON and plain text come out with the right types; a log with `<script>` in it comes back as plain text
 - 403, 404 and 501 responses are plain text with the headers
@@ -850,7 +924,7 @@ The shared setup for the server tests; it has no tests of its own. Each test get
 
 **If Operations asks:** "Nothing but our own page is ever sent as HTML, so a hostile log can't run as part of the page. The test checks every route automatically, including ones added later."
 
-#### `ChecklistTests` - lines 554-709
+#### `ChecklistTests` - lines 555-710
 N2-01, through the real routes `/checklists` and `/checklist`. Every response is checked for its type and nosniff/DENY/no CORS.
 - two checklists written in reverse order list sorted; a missing folder lists `[]`
 - only `.md` files directly in `checklists/`: not a `.txt`, a subfolder's file, or a folder named `folder.md`
@@ -863,7 +937,7 @@ N2-01, through the real routes `/checklists` and `/checklist`. Every response is
 
 **If Operations asks:** "Checklists are always read fresh from disk and only ever read. Tricks to read other files through this route are refused."
 
-#### `ChecklistRecordTests` - lines 712-820
+#### `ChecklistRecordTests` - lines 713-821
 N2-02, `checklist_records()` directly.
 - `- [ ] text` and `- [x] text` give the exact record and key
 - repeated text gets occurrence 1, 2, ... even with other lines between; each text counts on its own; the same text in two checklists gets two keys
@@ -875,7 +949,7 @@ N2-02, `checklist_records()` directly.
 
 **If Operations asks:** "Only real task lines become checkboxes, and each keeps its tick as long as its words stay the same."
 
-#### `ChecklistStateTests` - lines 823-983
+#### `ChecklistStateTests` - lines 824-984
 N2-03, the load and save functions directly.
 - nothing saved yet is `{}`; the first save makes the folders and writes only the state file (no temp file left)
 - ticks and unticks survive a reload
@@ -888,7 +962,7 @@ N2-03, the load and save functions directly.
 
 **If Operations asks:** "Your ticks are saved all at once, never into `incoming/`, the log folder or outside the working copy, and a broken file is reported, never guessed at."
 
-#### `ChecklistViewTests` - lines 986-1155
+#### `ChecklistViewTests` - lines 987-1156
 N2-04, through the real routes `/checklist-view` and `/checklist-state`. Every POST response is checked for JSON or plain text with nosniff/DENY/no CORS.
 - the view lists every record in order as JSON data, a `<script>` line included as text; its errors (400, 403) are plain text
 - saved ticks win over the file marks
@@ -904,7 +978,7 @@ N2-04, through the real routes `/checklist-view` and `/checklist-state`. Every P
 
 **Helper:** `post()` sends a raw body with a chosen token (this run's, another, none, or two) and Host.
 
-#### `OwnFileTests` - lines 1158-1252
+#### `OwnFileTests` - lines 1159-1253
 N2-05, through the real route `/files`, each test on a fresh empty root. Every call checks JSON, nosniff/DENY/no CORS, no disk change, and that the route gives the same as `list_own_files()`.
 - no folders yet: empty lists, and nothing created
 - F-, INJ-, IR-, NOTE- and SU- files written out of order come back in filename order, mixed across both folders
@@ -915,7 +989,7 @@ N2-05, through the real route `/files`, each test on a fresh empty root. Every c
 
 **If Operations asks:** "The list shows only your own files, grouped by type, and a bad link is reported without hiding the rest."
 
-#### `NewFileTypeTests` - lines 1255-1358
+#### `NewFileTypeTests` - lines 1256-1359
 N3-01, `new_file_type()` directly.
 - each of the five types gives its exact entry: path pattern, number or not, template, library or not
 - exactly five types, in the table's order; only Incident report and Finding need a number, and that agrees with a `{nnn}` in the path
@@ -926,7 +1000,7 @@ N3-01, `new_file_type()` directly.
 
 **If Operations asks:** "Only the five exact types exist, each with a fixed folder."
 
-#### `LibraryTests` - lines 1361-1614
+#### `LibraryTests` - lines 1362-1615
 N3-02, on fake library entries only (the real `findings-library/` is never read). Every listing checks that no byte on disk changed.
 - a missing or empty folder, or only `README.md`: no entries, nothing created
 - two entries come back sorted with their exact titles; sorted even when the disk lists them in reverse (`glob` patched)
@@ -941,7 +1015,7 @@ N3-02, on fake library entries only (the real `findings-library/` is never read)
 
 **If Operations asks:** "The library list is read fresh from disk, only ever read, and a bad entry is reported without hiding the good ones."
 
-#### `NumberTests` - lines 1617-2062
+#### `NumberTests` - lines 1618-2063
 N3-03, `finding_id_warnings()` and `suggest_ir_number()` directly. Every call checks that no byte or name on disk changed.
 - `000`, `006` and `999` pass; `6`, `01`, `1000`, `abc`, `00a`, `"123\n"`, Arabic-Indic digits, a NUL, `""` and `" 007"` fail, for both the check and the warning
 - no folders: no warning and `001`, nothing created
@@ -954,10 +1028,10 @@ N3-03, `finding_id_warnings()` and `suggest_ir_number()` directly. Every call ch
 
 **If Operations asks:** "Duplicate finding IDs are found across the whole team's copies, and the IR suggestion is always the highest number in use plus one, never written anywhere."
 
-#### `tree()` + `FAKE_TEMPLATES` + `LIBRARY_ENTRY` - lines 2065-2112
+#### `tree()` + `FAKE_TEMPLATES` + `LIBRARY_ENTRY` - lines 2066-2113
 `tree()` records every name under a folder (links not followed) with its bytes, its link target or "folder", so a test can prove nothing was created, changed or removed. `FAKE_TEMPLATES` are the four templates with look-alike markers (`[[IR_ID_EXTRA]]`, `[[ IR_ID ]]`, `[[FINDING_ID_EXTRA]]`, `[[PREVIOUS_FINDING_ID]]`, ...); `LIBRARY_ENTRY` is a fake library entry with a later heading of the same form.
 
-#### `CreateNewFileTests` - lines 2115-2678
+#### `CreateNewFileTests` - lines 2116-2679
 N3-04, `create_new_file()` directly. A refusal is checked by `assert_refused()`: the folder-making functions are patched to fail, and the root, the outside folder and the log folder are byte-for-byte and name-for-name unchanged. A success is checked by `assert_created()`: exactly the new file and the folders it needs.
 - each type at its exact path with its exact text: Note empty; IR with every `[[IR_ID]]` filled and the look-alikes kept; Status update and Inject response byte copies; Finding with the ID and title filled; the repo's real IR and finding templates filled the same way
 - a title with `|`, backticks, `$`, `é`, `[[HOST]]`, `[[FINDING_ID]]`, `\` and a trailing space goes in exactly; the file name uses only the slug
@@ -974,11 +1048,11 @@ N3-04, `create_new_file()` directly. A refusal is checked by `assert_refused()`:
 
 **If Operations asks:** "Every way a new file could land in the wrong place, overwrite something, or go in half-made was tried, and each is refused before anything changes."
 
-#### `NewFileRouteTests` - lines 2681-3065
+#### `NewFileRouteTests` - lines 2682-3066
 N3-05, through the real routes `GET /new-data` and `POST /new-file`, each test on a fresh root with the fake templates. Every response is checked for nosniff, DENY and no CORS; a refusal is plain text and changes no file in the root or the outside folder.
 - `/new-data`: the exact JSON (five types with their flags, sorted entries including a `<script>` title as text, the library refusal, `005`, the IR refusal); on an empty root `001` and nothing created; `findings-library/`, `field-notes/` or `incoming/` linked outside, alone or all three, still gives the five types with the link in its refused list (Chunk N3 D1); a bad entry doesn't hide a good one; IR-999 gives `null` and the exact note, and a typed number is still created; a raw template entry's title comes back as `[[FINDING_TITLE]]` (Chunk N3 D3)
 - create: each type at its exact path with `{path, [], []}`; a library finding; the fields go to `create_new_file()` exactly as sent; duplicate-ID warnings and refusals come back in path order; a typed IR number already in use warns and is still created (Chunk N3 D2); a Finding is created with `incoming/` linked outside (Chunk N3 D1); a title with a line break (LF, CR or CRLF before an injected `- **Severity:**` line) gives a plain-text 400 that doesn't repeat the title, and nothing is created (Chunk N3 D5)
-- refused with 400 before `create_new_file()` runs: a missing or extra field, `filename`, `path`, a list, a string, `null`, fields of the wrong type; bad bodies (no `Content-Length`, `abc`, `-1`, `1e3`, over 64 KiB, empty, non-UTF-8, broken JSON); a body shorter than its `Content-Length` times out with a 400 and the server goes on answering (the real timeout is 10 seconds)
+- refused with 400 before `create_new_file()` runs: a missing or extra field, `filename`, `path`, a list, a string, `null`, fields of the wrong type; bad bodies (no `Content-Length`, `abc`, `-1`, `1e3`, over 64 KiB, empty, non-UTF-8, broken JSON); a body shorter than its `Content-Length` times out with a 400 and the server goes on answering (the real timeout is 2 seconds, N5 F2)
 - refused with 400 by the create step, with the reason: unknown type, empty slug, bad or missing number, a number for a Note, a library entry for a Note
 - the guard: a wrong Host, no token, a wrong token, the token twice or another run's token gives 403 before anything runs; the token read from the served page works
 - errors keep their reason: "already exists" 403, a non-UTF-8 template 500, a `PermissionError` 500
@@ -986,10 +1060,10 @@ N3-05, through the real routes `GET /new-data` and `POST /new-file`, each test o
 
 **If Operations asks:** "Only our page, with this run's secret, can create a file; it can only send a type, title, number and library entry, and every problem comes back as a readable message with nothing created."
 
-#### `PageParts` - lines 3068-3094
+#### `PageParts` - lines 3069-3095
 A small HTML reader: what's inside `<nav>` and `<main>`, the text a person would see, and the token in the `<meta name="cptc-token">` tag.
 
-#### `ScanMarkerTests` - lines 3097-3163
+#### `ScanMarkerTests` - lines 3098-3164
 N4-01, `scan_markers()` on fake text only.
 - `notebook.MARKER_RE` and `notebook.strip_markers` are compile.py's own objects (`assertIs`); compile.py's source imports nothing from `notebook` (an `ast` check)
 - all four kinds in order, with a three-line NOTE, as the full literal field list
@@ -998,7 +1072,7 @@ N4-01, `scan_markers()` on fake text only.
 
 **If Operations asks:** "The scanner finds exactly the markers compile.py would, in order, with a repeated name shown once."
 
-#### `MarkerControlTests` - lines 3166-3261
+#### `MarkerControlTests` - lines 3167-3262
 N4-02, `marker_controls()` on fake text only.
 - a labelled value is a one-line input; a marker alone on its line (spaces and a tab around it) is a textarea; the line after a `#` or `######` heading is a textarea even with a label; a marker inside a heading is one line, even right under another heading
 - `CHOOSE: first / second / third` is a dropdown with exactly those three options; a TODO is an input or a textarea by its line, with its text as guidance
@@ -1007,7 +1081,16 @@ N4-02, `marker_controls()` on fake text only.
 
 **If Operations asks:** "Each kind of marker gets the box the spec describes, and notes never get a box."
 
-#### `FormatWarningTests` - lines 3264-3376
+#### `MarkerStatusTests` - lines 3265-3289
+N4-06, `marker_status()` on fake text only.
+- five markers (a heading ID, two NOTEs, one of them over two lines, a CHOOSE and a TODO): `5 markers left (2 of them notes)`
+- `[[HOST]]` three times and `[[PORT]]`: `2 markers left (0 of them notes)` (N5 F4)
+- two identical CHOOSEs and two identical NOTEs each count: `4 markers left (2 of them notes)`
+- empty text, plain text and a bash `[[ -f x ]]` give `complete`; only a NOTE left gives `1 markers left (1 of them notes)`
+
+**If Operations asks:** "The status counts exactly what the screen shows, and a file is complete only when no marker, notes included, is left."
+
+#### `FormatWarningTests` - lines 3292-3404
 N4-03, `format_warnings()`.
 - the CVSS rule is compile.py's own regex object (`assertIs`)
 - `FINDING_ID` and `IR_ID`: `000` and `999` pass; too few or many digits, wrong prefix or case, Arabic-Indic digits, trailing text, a trailing newline and a leading space warn
@@ -1019,20 +1102,21 @@ N4-03, `format_warnings()`.
 
 **If Operations asks:** "Every rule was tried at its edges, and none of them ever blocks a save."
 
-#### `ApplyMarkerValueTests` - lines 3379-3487
+#### `ApplyMarkerValueTests` - lines 3407-3535
 N4-04, `apply_marker_values()`, with fields from a real `scan_markers()` call on the text as scanned.
 - one plain marker replaced, with CRLF, trailing spaces and a tab around it unchanged (the full text compared)
 - a value with `|`, backticks, `$`, `[[`, backslashes, accents, an emoji, leading and trailing spaces, LF and CRLF goes in byte for byte
 - a value `[[PORT]]` isn't filled again when PORT has a value too; a repeated name fills every copy and leaves `[[HOSTNAME]]`; two identical TODOs get their own values by position; a moved marker is found where it is now
-- a marker typed over or edited warns and changes nothing else; one of two identical TODOs removed, or one copied, warns for each filled box and replaces neither
+- a marker typed over or edited warns, with the value typed, and changes nothing else; one of two identical TODOs removed, or one copied, warns for each filled box with that box's own value and replaces neither
+- for both warnings, a messy value (leading spaces, backticks, quotes, `|`, `$`, `[[ -f y ]]`, CRLF, a second line, `[[HOST]]`, a trailing space and tab) comes back byte for byte at the end of the warning (N5 F3b, F3c)
 - an empty value leaves its marker, and gives no warning when the marker is gone; a whitespace-only value counts as filled; a NOTE with a value stays
-- a mixed save (repeated name, empty title, NOTE, CHOOSE, two TODOs, a missing marker): the full output and warning list
+- a mixed save (repeated name, empty title, NOTE, CHOOSE, two TODOs, a missing marker): the full output and warning list (the missing marker's value at its end)
 
 **If Operations asks:** "Values go in exactly as typed, nothing else in the file moves, and when a marker can't be matched safely the box says so instead of guessing."
 
-#### `EDITABLE_FILES` + `CURRENT` + `EditableFileTests` - lines 3490-3822
+#### `EDITABLE_FILES` + `CURRENT` + `EditableFileTests` - lines 3538-3872
 N4-05, through the real routes `GET /file` and `POST /file`. `EDITABLE_FILES` puts the person's own files next to one file in every place the view must never open or save. `save()` sends `base` as the file's text on disk at that moment (`CURRENT`, read only from a regular file, since opening a FIFO would wait forever), so these tests never go stale; `StaleSaveTests` tests the stale check itself. Every refusal goes through `assert_refused()`: the status, the text, and the root, the outside folder and the log folder unchanged byte for byte and name for name. Every response is checked for nosniff, DENY and no CORS, and is JSON or plain text.
-- reading both own files gives the exact text and `marker_controls()`'s fields; exactly the listed files open
+- reading both own files gives the exact text, `marker_controls()`'s fields and `marker_status()`'s status; exactly the listed files open
 - saving both: Unicode, an emoji, LF and CRLF, a tab, trailing spaces and no final newline round-trip byte for byte, with no `.save-*` left; the file's mode is kept; a BOM file opens without the BOM and saves as the original minus the BOM
 - refused for reading and saving: `notes/`, `templates/`, `checklists/`, `incoming/`, Bob's `field-notes/`, a subfolder, a `.txt`, `checklist-state.json`, an in-root copy elsewhere, a log path, the folders themselves, a missing file (not created); a log folder set inside the person's own folder opens but doesn't save
 - refused: absolute paths, a leading `/`, `..`, `//`, `./`, an outside path, NUL in the top folder, the name folder and the file name, a bare NUL, empty; GET needs exactly one `?path=`
@@ -1040,11 +1124,11 @@ N4-05, through the real routes `GET /file` and `POST /file`. `EDITABLE_FILES` pu
 - a folder and a FIFO named `.md` are refused (the FIFO's `lstat` compared, since `tree()` would block on it)
 - a raw non-UTF-8 byte and a lone surrogate are refused; bad bodies (no, non-numeric or too-big `Content-Length`, broken JSON, wrong shape, missing or extra keys, a missing `base` or one that is `null`, an object, a list, a number or a boolean, wrong types for each key and each field key) give 400 with `save_editable_file()` patched to fail if called; a short body times out with a 400 and the server goes on answering
 - a missing, wrong or other run's token and an evil or `localhost` Host are refused; only then does the good request save
-- a save with GET's fields sent back (extra keys and all) applies the values, rescans, and returns the missing-marker, leftover and CVSS_SCORE warnings
+- a save with GET's fields sent back (extra keys and all) applies the values, rescans, and returns `complete` and the missing-marker (with its value), leftover and CVSS_SCORE warnings
 
 **If Operations asks:** "Only your own files can be opened or saved, a save is all or nothing, and every way to reach another file was tried and refused with nothing changed."
 
-#### `StaleSaveTests` - lines 3825-3972
+#### `StaleSaveTests` - lines 3875-4022
 Chunk N4 D4 (DECISIONS 2026-10-29), the adversary's 18 cases. A subclass of `EditableFileTests` for its server and helpers; its `run()` runs only its own `test_stale_*` tests, so the parent's don't run twice. `assert_stale()` checks the 409 and its text, that `tempfile.mkstemp` is never called, and that the file's bytes, mode, inode and change time and the folder's names are all unchanged, as is every folder's `tree()`.
 - `GET /file`'s text sent back as `base` saves, with a box value applied (cases 1, 2)
 - refused with the 409, the newer file kept exactly: a new text, a one-character change, a trailing space, LF changed to CRLF on disk (6, 7, 8), and a `base` with CRLF, no final newline or a leading space against an unchanged file (8)
@@ -1060,13 +1144,23 @@ Chunk N4 D4 (DECISIONS 2026-10-29), the adversary's 18 cases. A subclass of `Edi
 
 **If Operations asks:** "If the file was changed anywhere else after you opened it, even one character or a line ending, the save is refused with 'changed on disk since you opened it, reload' and nothing is written."
 
-#### `AppShellTests` - lines 3975-4064
-Updated in place at N3-05; still the one test class that checks the page's safety (the NT4-06 rule).
+#### `SaveEndpointTests` - lines 4025-4143
+NT4-07, one marker-box Save through the real `POST /file`. Like `StaleSaveTests`, a subclass of `EditableFileTests` whose `run()` runs only its own `test_box_save_*` tests. `add_file()` writes one of alice's files as exact bytes and opens it; `box_save()` sends every field from that answer in scan order, a value per marker (NOTEs empty), as the page does.
+- the real `templates/finding.md`: FINDING_ID `F-1` (in the heading and the evidence line), a title with backticks, `$`, `|` and `[[ -f x ]]`, the Status CHOOSE (not Severity), DATE `2026-1-29`, TIME in fullwidth digits, REFERENCE_URL `see [[REF]]`: the exact file bytes; `tempfile.mkstemp` once and `os.replace` once, onto this file; the home, outside and log folders otherwise unchanged; the answer's fields and status (`38 markers left (13 of them notes)`, the new `[[REF]]` with a box) and the five warnings in order
+- CRLF, a mixed final LF, a tab and spaces around the marker are kept
+- the text as sent (a line typed in the textarea) is saved, not the text as opened
+- after the rescan: one box per name, the second of two identical CHOOSEs filled by position, the rest in document order
+- empty boxes leave every marker, with no warnings; a NOTE stays even with a value sent, and still counts; the last marker filled gives `[]` and `complete`
+
+**If Operations asks:** "One press of Save writes the file once, exactly as expected, and nothing else on the disk changes."
+
+#### `AppShellTests` - lines 4146-4230
+Updated in place at N3-05 and N4-06; the display-safety asserts moved to `PageSafetyTests` at NT4-06.
 - the left column holds the theme button, the file list, New and Checklists, in that order; the main pane is empty; the only visible words are "Light / dark", "New" and "Checklists" (no Logs, Export or Compile yet); the file list loads when the page opens
 - the page carries this run's token exactly once, and no leftover `TOKEN_SLOT`
 - a hostile token is escaped in the page
-- the script has no `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write`; both POSTs (a tick and a new file) send `X-CPTC-Token`; it makes real checkboxes, sets text with `textContent`, locks a box while saving and restores its earlier value
-- the New form's request is exactly `{type, title, nnn, library}`, with a number only when the type needs one and a library entry only for a Finding; the title box is one line and there is no textarea; hidden rows follow the server's flags
+- all three POSTs (a tick, a new file, a save of a file) send `X-CPTC-Token`, and the script has 7 `fetch(` calls; it makes real checkboxes, locks a box while saving and restores its earlier value
+- the New form's request is exactly `{type, title, nnn, library}`, with a number only when the type needs one and a library entry only for a Finding; the title box is one line; hidden rows follow the server's flags
 - every refused list (own files, library, IR scan), the warnings, the reload with the new file selected, and the IR suggestion fetched again after a create (Chunk N3 CR-1) are in the script
 - the page has the dark-mode media query, both button overrides and the click handler
 
@@ -1074,9 +1168,29 @@ Updated in place at N3-05; still the one test class that checks the page's safet
 
 **Limit:** these check the served script's text, not its behaviour in a browser (see `APP_PAGE`).
 
+#### `PageSafetyTests` - lines 4233-4277
+NT4-06, the one automated page-source display-safety test. The served page has no `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write`, and has `textContent` and `.value`; `element()` sets text with `textContent`; a file's text goes in only as `fileText.value = data.text`, `fileText.value = result.text` and `kept.value = text`, and `data.text` appears only there and as `var base = data.text`. It also reads this test file with `ast` and fails if any other test asserts on those strings (`SAFETY_STRINGS`); that check was shown to fail on a copy with one such assert added to `AppShellTests`.
+
+**If Operations asks:** "One test proves the page never turns text into page code, and that no other test quietly duplicates it."
+
+**Limit:** the duplicate check reads only `assertIn`/`assertNotIn` calls with exactly those strings, in this file.
+
+#### `FillInPageTests` - lines 4280-4503
+N4-06..N4-09, the fill-in view in the served script (its text, as in `AppShellTests`). The boxes themselves come from `marker_controls()` (`MarkerControlTests`); these check the page builds the matching element.
+- N4-06: a file opens through `goTo()` and `GET /file`; a dropdown starts on "(not chosen)" with the options as sent; a textarea or a one-line input; rows in field order with TODO guidance; a NOTE is highlighted help and its branch returns before any box; the path and the status line
+- N4-07: one `fetch("/file"` in the script, through `post()`: `{path, text, base, fields}` with the token; the answer's text becomes `base`; Save sends every field (a NOTE's value empty), clears the pending autosave, locks the textarea and the boxes; success shows "Saved." and each warning in a `<pre>`; a refusal keeps the boxes and `base` and shows "Not saved: ..."
+- N4-08: `AUTOSAVE_DELAY` is 2000; each keystroke shows "not saved yet" and restarts the timer unless stopped; autosave is `post([])` and waits while a save is on its way; "saved at" only when the textarea still holds the text sent; boxes holding values aren't rebuilt
+- N5 F1 and F1d: a 409 calls `offerReload()`, which stops autosave; Reload keeps `unsavedText()` (the text, then each box value) in a read-only box with Copy, and draws only while its view is still the open one; a failed reload keeps the view
+- N4-08 C7, Chunk N5 CR-1: the file buttons, New and Checklists go through `goTo()`; `leaveText()` leaves through `quit()` when saved and shows Leave without saving after a failure or a 409; that button leaves through `quit()` too, which stops the view
+- N4-09: the ` unsaved` indicator follows the boxes; exactly one `window.confirm(` in the script, asked only while boxes hold values, after any save on its way has answered and not after a Save with warnings (Chunk N5 CR-2); `beforeunload` warns while boxes hold values or the text can't be saved (N5 L6)
+
+**If Operations asks:** "The page's fill-in code is all there, and every way it could lose typing was tried in a fake browser before the real check."
+
+**Limit:** these check the script's text only. Behaviour, timing and the browser's own dialogs were tried in Node (see `APP_PAGE`) and are on the user's browser list.
+
 ## 4. Related edits outside tools/
 
-None outside `tools/` in Chunk N4 (it changed only `tools/notebook.py`, `tools/tests/test_notebook.py` and this file), Chunk N3, or Chunk N2. (CS-02's `TODO.md` edit and W-01's `agents.md` edit, made on 2026-10-28 before N2 started, were separate tasks and not part of the N2 commit; `agents.md` is ignored by git.)
+None outside `tools/` in Chunk N5 (it changed only `tools/notebook.py`, `tools/tests/test_notebook.py` and this file), Chunk N4, Chunk N3, or Chunk N2. (CS-02's `TODO.md` edit and W-01's `agents.md` edit, made on 2026-10-28 before N2 started, were separate tasks and not part of the N2 commit; `agents.md` is ignored by git.)
 
 From Chunk N1, one related spec edit inside `tools/`:
 

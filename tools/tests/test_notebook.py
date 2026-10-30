@@ -14,6 +14,7 @@ import shutil
 import socket
 import stat
 import string
+import tempfile
 import threading
 import unittest
 from html.parser import HTMLParser
@@ -3013,7 +3014,7 @@ class NewFileRouteTests(ServerTestCase):
         # after the handler's timeout, and the server goes on answering.
         # The real timeout is set (the stdlib default, None, waits forever);
         # the test shortens it so it runs quickly.
-        self.assertEqual(notebook.NotebookHandler.timeout, 10)
+        self.assertEqual(notebook.NotebookHandler.timeout, 2)
         with mock.patch.object(notebook.NotebookHandler, "timeout", 0.5), \
                 mock.patch.object(notebook, "create_new_file", side_effect=AssertionError("called")):
             self.assert_not_created(400, "send one new file as JSON", b"{}", length="50")
@@ -3261,6 +3262,33 @@ class MarkerControlTests(unittest.TestCase):
                          notebook.scan_markers(text))
 
 
+class MarkerStatusTests(unittest.TestCase):
+    """N4-06: marker_status(), the fill-in view's status line."""
+
+    def test_counts_markers_and_notes(self):
+        text = ("# [[FINDING_ID]]: x\n[[NOTE: delete me]]\n- **Severity:** [[CHOOSE: High / Low]]\n"
+                "[[TODO: who?]]\n[[NOTE: a\nlonger note]]\n")
+        self.assertEqual(notebook.marker_status(text), "5 markers left (2 of them notes)")
+
+    def test_repeated_name_counts_once(self):
+        # As its one box: the count matches the boxes and notes shown.
+        text = "[[HOST]] and [[HOST]] and [[HOST]]\n[[PORT]]\n"
+        self.assertEqual(notebook.marker_status(text), "2 markers left (0 of them notes)")
+
+    def test_repeated_body_markers_count_each(self):
+        text = "[[CHOOSE: a / b]]\n[[CHOOSE: a / b]]\n[[NOTE: x]] [[NOTE: x]]\n"
+        self.assertEqual(notebook.marker_status(text), "4 markers left (2 of them notes)")
+
+    def test_complete_when_no_markers_left(self):
+        for text in ("", "# F-001: done\n", "if [[ -f x ]]; then echo; fi\n"):
+            with self.subTest(text=text):
+                self.assertEqual(notebook.marker_status(text), "complete")
+
+    def test_only_notes_left_is_not_complete(self):
+        self.assertEqual(notebook.marker_status("done\n[[NOTE: read me]]\n"),
+                         "1 markers left (1 of them notes)")
+
+
 class FormatWarningTests(unittest.TestCase):
     """N4-03: format_warnings(), the fill-in view's never-blocking checks (OQ-09)."""
 
@@ -3423,30 +3451,50 @@ class ApplyMarkerValueTests(unittest.TestCase):
         current = "dc01 typed by hand [[TODO: who?]] [[PORT]]"
         self.assertEqual(
             notebook.apply_marker_values(current, self.fields(scanned, "dc02", "", "")),
-            (current, ["[[HOST]] is no longer in the text: value not saved"]))
+            (current, ["[[HOST]] is no longer in the text: value not saved: dc02"]))
         current = "[[HOST]] [[TODO: whom?]] [[PORT]]"
         self.assertEqual(
             notebook.apply_marker_values(current, self.fields(scanned, "", "alice", "")),
-            (current, ["[[TODO: who?]] is no longer in the text: value not saved"]))
+            (current, ["[[TODO: who?]] is no longer in the text: value not saved: alice"]))
+
+    def test_missing_marker_warning_keeps_the_value_exactly(self):
+        # N5 F3b: the box goes with the rescan, so the warning is where the
+        # writer copies the value from: every character as typed.
+        value = "  1. `nxc smb 10.0.0.5 -u guest -p ''` | $x [[ -f y ]]\r\n2. [[HOST]] \t"
+        current = "steps were here\n"
+        self.assertEqual(
+            notebook.apply_marker_values(current, self.fields("[[REPRODUCTION_STEPS]]\n", value)),
+            (current, ["[[REPRODUCTION_STEPS]] is no longer in the text: value not saved: " + value]))
 
     def test_one_of_two_identical_body_markers_removed(self):
         # Which copy is left can't be known, so neither value is used and
         # both warn: replacing the survivor could put the wrong value there.
         scanned = "1: [[TODO: same]]\n2: [[TODO: same]]\n"
         current = "2: [[TODO: same]]\n"
-        warning = "[[TODO: same]] is in the text 1 times, not 2, so it can't be told apart: value not saved"
+        warning = "[[TODO: same]] is in the text 1 times, not 2, so it can't be told apart: value not saved: "
+        # Each warning carries its own box's value (N5 F3c).
         self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "first", "second")),
-                         (current, [warning, warning]))
+                         (current, [warning + "first", warning + "second"]))
         # Only one box filled: still not used, one warning.
         self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "", "second")),
-                         (current, [warning]))
+                         (current, [warning + "second"]))
 
     def test_identical_body_marker_copied_also_refused(self):
         scanned = "[[TODO: same]]\n"
         current = "[[TODO: same]]\n[[TODO: same]]\n"
         self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "x")),
                          (current, ["[[TODO: same]] is in the text 2 times, not 1,"
-                                    " so it can't be told apart: value not saved"]))
+                                    " so it can't be told apart: value not saved: x"]))
+
+    def test_told_apart_warning_keeps_the_value_exactly(self):
+        # N5 F3c: the box comes back empty, so the value is copied from here.
+        value = "  1. `nxc smb 10.0.0.5 -u guest -p ''` | $x [[ -f y ]]\r\n2. [[HOST]] \t"
+        scanned = "[[TODO: step]]\n[[TODO: step]]\n"
+        current = "[[TODO: step]]\n"
+        self.assertEqual(
+            notebook.apply_marker_values(current, self.fields(scanned, value, "")),
+            (current, ["[[TODO: step]] is in the text 1 times, not 2,"
+                       " so it can't be told apart: value not saved: " + value]))
 
     def test_empty_value_leaves_marker(self):
         text = "a [[HOST]] b [[TODO: who?]] c [[CHOOSE: x / y]]\n"
@@ -3484,7 +3532,7 @@ class ApplyMarkerValueTests(unittest.TestCase):
             "- **Severity:** High\n"
             "1. one\n2. two [[HOST]]\n"
             "dc01 then F-001 typed\n",
-            ["[[GONE]] is no longer in the text: value not saved"]))
+            ["[[GONE]] is no longer in the text: value not saved: x"]))
 
 
 # A working copy with the person's own files and one file in every place
@@ -3603,7 +3651,8 @@ class EditableFileTests(ServerTestCase):
                 before = self.snapshot()
                 text = EDITABLE_FILES[path]
                 self.assertEqual(self.get(path), (200, {
-                    "path": path, "text": text, "fields": notebook.marker_controls(text)}))
+                    "path": path, "text": text, "fields": notebook.marker_controls(text),
+                    "status": notebook.marker_status(text)}))
                 self.assertEqual(self.snapshot(), before)
 
     def test_only_listed_files_open(self):
@@ -3621,7 +3670,7 @@ class EditableFileTests(ServerTestCase):
             with self.subTest(path=path):
                 status, answer = self.save(path, text)
                 self.assertEqual((status, answer), (200, {
-                    "path": path, "text": text, "fields": [], "warnings": []}))
+                    "path": path, "text": text, "fields": [], "status": "complete", "warnings": []}))
                 self.assertEqual((self.home / path).read_bytes(), text.encode("utf-8"))
                 self.assertEqual(self.get(path)[1]["text"], text)
         # The temp file was renamed into place, so none is left over.
@@ -3817,7 +3866,8 @@ class EditableFileTests(ServerTestCase):
         saved = "# F-001\n- **Host:** dc01 [[X\n- **Score:** 11.0\n"
         self.assertEqual((status, answer), (200, {
             "path": "findings/F-001-a.md", "text": saved, "fields": notebook.marker_controls(saved),
-            "warnings": ["[[GONE]] is no longer in the text: value not saved",
+            "status": "complete",
+            "warnings": ["[[GONE]] is no longer in the text: value not saved: y",
                          "HOST: " + notebook.LEFTOVER_WARNING,
                          "CVSS_SCORE: should be 0.0 to 10.0 with one decimal, e.g. 7.5"]}))
 
@@ -3972,6 +4022,127 @@ class StaleSaveTests(EditableFileTests):
         self.assertEqual((self.file_state(), self.snapshot()), before)
 
 
+class SaveEndpointTests(EditableFileTests):
+    """NT4-07: one marker-box Save through POST /file (N4-07)."""
+
+    # Run only these tests here, not EditableFileTests' again.
+    def run(self, result=None):
+        if not self._testMethodName.startswith("test_box_save_"):
+            return result
+        return super().run(result)
+
+    def add_file(self, path, text):
+        """Write one of alice's files as exact bytes; GET it and return the answer."""
+        (self.home / path).write_bytes(text.encode("utf-8"))
+        status, opened = self.get(path)
+        self.assertEqual(status, 200, opened)
+        return opened
+
+    def box_save(self, path, opened, values, text=None):
+        """Save opened's boxes with values ({marker: value}), as the page does.
+
+        Every field goes back in the scan's order, notes with "".
+        """
+        sent = [dict(field, value=values.get(field["marker"], "")) for field in opened["fields"]]
+        typed = opened["text"] if text is None else text
+        return self.save(path, typed, sent, base=opened["text"])
+
+    def test_box_save_real_template_writes_once(self):
+        path = "findings/F-010-real.md"
+        template = (support.TOOLS_DIR.parent / "templates" / "finding.md").read_text(encoding="utf-8")
+        opened = self.add_file(path, template)
+        title = "Weak `$pass` | in [[ -f x ]] test"
+        values = {"[[FINDING_ID]]": "F-1", "[[FINDING_TITLE]]": title,
+                  "[[CHOOSE: Confirmed / Exploited / Suspected]]": "Exploited",
+                  "[[DATE]]": "2026-1-29", "[[TIME]]": "１４:05",
+                  "[[REFERENCE_URL]]": "see [[REF]]"}
+        expected = template
+        for marker, value in values.items():
+            expected = expected.replace(marker, value)
+        # FINDING_ID is in the heading and the evidence line; both are filled.
+        self.assertEqual(expected.count("F-1"), 2)
+        before = self.snapshot()
+        with mock.patch.object(notebook.os, "replace", wraps=os.replace) as replace, \
+                mock.patch.object(notebook.tempfile, "mkstemp", wraps=tempfile.mkstemp) as mkstemp:
+            status, answer = self.box_save(path, opened, values)
+        self.assertEqual(status, 200, answer)
+        self.assertEqual((self.home / path).read_bytes(), expected.encode("utf-8"))
+        # One temp file, one rename onto this file: written once.
+        self.assertEqual(mkstemp.call_count, 1)
+        self.assertEqual(replace.call_count, 1)
+        self.assertEqual(replace.call_args[0][1], str((self.home / path).resolve()))
+        # Nothing else changed anywhere.
+        after_home, after_outside, after_logdir = self.snapshot()
+        before_home = dict(before[0], **{path: after_home[path]})
+        self.assertEqual((after_home, after_outside, after_logdir), (before_home,) + before[1:])
+        self.assertEqual(answer, {
+            "path": path, "text": expected, "fields": notebook.marker_controls(expected),
+            "status": notebook.marker_status(expected),
+            "warnings": ["FINDING_ID: should look like F-001",
+                         "DATE: should be a date as YYYY-MM-DD",
+                         # Fullwidth digits aren't [0-9] (Chunk N4 D1).
+                         "TIME: should be a time as HH:MM",
+                         "REFERENCE_URL: should start with http",
+                         "REFERENCE_URL: " + notebook.LEFTOVER_WARNING]})
+        # The value "[[REF]]" is now a marker in the file, so it has a box.
+        self.assertIn("[[REF]]", [field["marker"] for field in answer["fields"]])
+        self.assertEqual(answer["status"], "38 markers left (13 of them notes)")
+
+    def test_box_save_keeps_line_endings_and_spacing(self):
+        path = "field-notes/alice/NOTE-crlf.md"
+        opened = self.add_file(path, "# a\r\n  [[HOST]]  \r\n\tkeep\r\n\r\n[[PORT]]\n")
+        status, answer = self.box_save(path, opened, {"[[HOST]]": "dc01"})
+        self.assertEqual(status, 200, answer)
+        self.assertEqual((self.home / path).read_bytes(), b"# a\r\n  dc01  \r\n\tkeep\r\n\r\n[[PORT]]\n")
+
+    def test_box_save_uses_the_text_as_sent_not_as_opened(self):
+        path = "field-notes/alice/NOTE-typed.md"
+        opened = self.add_file(path, "[[HOST]]\n")
+        typed = "typed first\n[[HOST]]\nand after\n"
+        status, answer = self.box_save(path, opened, {"[[HOST]]": "dc01"}, text=typed)
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer["text"], "typed first\ndc01\nand after\n")
+        self.assertEqual((self.home / path).read_text(encoding="utf-8"), answer["text"])
+
+    def test_box_save_rescan_keeps_one_box_per_name_and_order(self):
+        path = "field-notes/alice/NOTE-rescan.md"
+        opened = self.add_file(path, "[[A]] [[B]]\n[[CHOOSE: x / y]]\n[[B]] [[A]]\n"
+                                     "[[CHOOSE: x / y]]\n[[TODO: one]]\n")
+        # The second of the two identical dropdowns, by position.
+        sent = [dict(field, value="") for field in opened["fields"]]
+        sent[3]["value"] = "y"
+        sent[0]["value"] = "a"
+        status, answer = self.save(path, opened["text"], sent, base=opened["text"])
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer["text"], "a [[B]]\n[[CHOOSE: x / y]]\n[[B]] a\ny\n[[TODO: one]]\n")
+        self.assertEqual([field["marker"] for field in answer["fields"]],
+                         ["[[B]]", "[[CHOOSE: x / y]]", "[[TODO: one]]"])
+        self.assertEqual(answer["status"], "3 markers left (0 of them notes)")
+
+    def test_box_save_empty_boxes_leave_markers(self):
+        path = "field-notes/alice/NOTE-empty.md"
+        text = "[[HOST]] [[CHOOSE: a / b]]\n[[TODO: x]]\n"
+        opened = self.add_file(path, text)
+        status, answer = self.box_save(path, opened, {})
+        self.assertEqual((status, answer["text"], answer["warnings"]), (200, text, []))
+        self.assertEqual((self.home / path).read_text(encoding="utf-8"), text)
+
+    def test_box_save_notes_stay_and_still_count(self):
+        path = "field-notes/alice/NOTE-notes.md"
+        opened = self.add_file(path, "[[HOST]]\n[[NOTE: read me]]\n")
+        # Even a value sent for the note is ignored: the app never removes a note.
+        status, answer = self.box_save(path, opened, {"[[HOST]]": "dc01", "[[NOTE: read me]]": "gone"})
+        self.assertEqual(status, 200, answer)
+        self.assertEqual(answer["text"], "dc01\n[[NOTE: read me]]\n")
+        self.assertEqual(answer["status"], "1 markers left (1 of them notes)")
+
+    def test_box_save_last_marker_gives_complete(self):
+        path = "field-notes/alice/NOTE-last.md"
+        opened = self.add_file(path, "# x\n[[HOST]]\n")
+        status, answer = self.box_save(path, opened, {"[[HOST]]": "dc01"})
+        self.assertEqual((status, answer["fields"], answer["status"]), (200, [], "complete"))
+
+
 class AppShellTests(ServerTestCase):
     def get_page(self):
         response, page = self.send_full("GET", "/", self.good_host())
@@ -4005,18 +4176,14 @@ class AppShellTests(ServerTestCase):
         self.assertEqual(parts.tokens, [self.server.token])
         self.assertNotIn('x"><script>', page)
 
-    def test_script_builds_text_safely_and_posts_the_token(self):
+    def test_script_posts_the_token_and_locks_boxes(self):
+        # The display-safety asserts are in PageSafetyTests (NT4-06).
         page, _ = self.get_page()
-        self.assertNotIn("innerHTML", page)
-        self.assertNotIn("outerHTML", page)
-        self.assertNotIn("insertAdjacentHTML", page)
-        self.assertNotIn("document.write", page)
-        # Both POSTs (a tick and a new file) send the token.
-        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 2)
-        self.assertEqual(page.count("fetch("), 5)
+        # All three POSTs (a tick, a new file, a save of a file) send the token.
+        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 3)
+        self.assertEqual(page.count("fetch("), 7)
         self.assertIn('fetch("/new-file", {\n      method: "POST",', page)
         self.assertIn('box.type = "checkbox";', page)
-        self.assertIn("made.textContent = text;", page)
         # A box is locked while its save is pending and, if the save fails,
         # goes back to its value from before the click (not just flipped).
         self.assertIn("box.disabled = true;", page)
@@ -4034,9 +4201,8 @@ class AppShellTests(ServerTestCase):
                       "      library: kind.library && library.value ? library.value : null\n"
                       "    };", page)
         self.assertIn("body: JSON.stringify(request)", page)
-        # A one-line title box; there is no textarea on the page yet.
+        # A one-line title box.
         self.assertIn('title.type = "text";', page)
-        self.assertNotIn("textarea", page)
         # Hidden fields follow the type the server describes.
         self.assertIn("nnnRow.hidden = !kind.needs_nnn;", page)
         self.assertIn("libraryRow.hidden = !kind.library;", page)
@@ -4062,6 +4228,279 @@ class AppShellTests(ServerTestCase):
         self.assertIn(':root[data-theme="dark"]', page)
         self.assertIn(':root[data-theme="light"]', page)
         self.assertIn('getElementById("theme-toggle").addEventListener("click"', page)
+
+
+class PageSafetyTests(ServerTestCase):
+    """NT4-06: the one automated page-source display-safety test (Constraint 9)."""
+
+    # The display-safety source asserts. Only the test below may make them.
+    SAFETY_STRINGS = {"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
+                      "textContent", ".value", "made.textContent = text;",
+                      "fileText.value = data.text;", "fileText.value = result.text;",
+                      "kept.value = text;"}
+
+    def test_page_source_is_display_safe(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        # No way for text to become HTML: no innerHTML or its relatives.
+        self.assertNotIn("innerHTML", page)
+        self.assertNotIn("outerHTML", page)
+        self.assertNotIn("insertAdjacentHTML", page)
+        self.assertNotIn("document.write", page)
+        self.assertIn("textContent", page)
+        self.assertIn(".value", page)
+        # Every element's text goes through element(), which uses textContent,
+        # and a file's text goes into its textarea through .value only.
+        self.assertIn("made.textContent = text;", page)
+        self.assertIn("fileText.value = data.text;", page)
+        # Its only other use is as the next Save's base, never as page content.
+        self.assertIn("var base = data.text;", page)
+        self.assertEqual(page.count("data.text"), 2)
+        # After a Save, the saved text; after a Reload, the kept text.
+        self.assertIn("fileText.value = result.text;", page)
+        self.assertIn("kept.value = text;", page)
+        self.assert_no_other_test_makes_these_asserts()
+
+    def assert_no_other_test_makes_these_asserts(self):
+        """NT4-06: no other test in this file asserts on SAFETY_STRINGS."""
+        tree = ast.parse((support.TOOLS_DIR / "tests" / "test_notebook.py").read_text(encoding="utf-8"))
+        others = []
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef) or function.name == "test_page_source_is_display_safe":
+                continue
+            for call in ast.walk(function):
+                if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                        and call.func.attr in ("assertIn", "assertNotIn") and call.args
+                        and isinstance(call.args[0], ast.Constant)
+                        and call.args[0].value in self.SAFETY_STRINGS):
+                    others.append(function.name)
+        self.assertEqual(others, [])
+
+
+class FillInPageTests(ServerTestCase):
+    """N4-06: the page's fill-in view. The controls come from marker_controls()
+    (MarkerControlTests); these check the page builds the matching element."""
+
+    def get_page(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        return page
+
+    def test_each_listed_file_opens_in_the_fill_in_view(self):
+        page = self.get_page()
+        self.assertIn('getJson("/file?path=" + encodeURIComponent(path), showFillIn);', page)
+
+    def test_each_control_kind_gets_its_element(self):
+        page = self.get_page()
+        # A dropdown starts on an empty choice, then the options as sent.
+        self.assertIn('if (field.control === "dropdown") {\n    var list = element("select");', page)
+        self.assertIn('var none = list.appendChild(element("option", "(not chosen)"));\n'
+                      '    none.value = "";', page)
+        self.assertIn("field.options.forEach(function (text) {", page)
+        self.assertIn('if (field.control === "textarea") {\n    var big = element("textarea");', page)
+        # Anything else is a one-line input.
+        self.assertIn('var line = element("input");\n  line.type = "text";\n  return line;', page)
+
+    def test_boxes_follow_the_field_order_and_show_guidance(self):
+        page = self.get_page()
+        self.assertIn("answer.fields.forEach(function (field) {", page)
+        self.assertIn("var box = markerBox(field);\n"
+                      "      entries.push({field: field, box: box});\n"
+                      "      var row = addField(boxes, field.name, box);", page)
+        self.assertIn("if (field.guidance !== undefined) {\n"
+                      "        row.appendChild(element(\"p\", field.guidance));", page)
+
+    def test_a_note_is_highlighted_help_and_never_a_box(self):
+        page = self.get_page()
+        # The note's branch returns before any box is made.
+        self.assertIn('if (field.control === "note") {', page)
+        self.assertIn('boxes.appendChild(element("pre")).appendChild(element("mark", "NOTE:" + field.body));\n'
+                      "        entries.push({field: field, box: null});\n"
+                      "        return;", page)
+
+    def test_view_shows_the_path_and_status(self):
+        page = self.get_page()
+        self.assertIn('main.appendChild(element("h2", data.path));\n'
+                      '  var statusLine = main.appendChild(element("p"));', page)
+        self.assertIn("statusLine.textContent = answer.status;", page)
+
+    def test_every_save_is_one_post_with_the_text_base_and_token(self):
+        # N4-07/N4-08: Save and autosave both go through post(): the
+        # textarea's text as it is now, the base, and the fields.
+        page = self.get_page()
+        self.assertEqual(page.count('fetch("/file", {'), 1)
+        self.assertIn("    var sent = fileText.value;\n"
+                      "    warningsShown = false;\n"
+                      "    busy = true;\n"
+                      "    save.disabled = true;", page)
+        self.assertIn('fetch("/file", {\n'
+                      '      method: "POST",\n'
+                      '      headers: {"Content-Type": "application/json", "X-CPTC-Token": TOKEN},\n'
+                      "      body: JSON.stringify({path: data.path, text: sent, base: base, fields: fields})",
+                      page)
+        # The saved text is the next base.
+        self.assertIn("        done();\n"
+                      "        /* The saved text is the next base. */\n"
+                      "        base = result.text;", page)
+
+    def test_save_sends_every_field_and_shows_its_warnings(self):
+        page = self.get_page()
+        self.assertIn("var fields = entries.map(function (entry) {\n"
+                      "      return {name: entry.field.name, marker: entry.field.marker,"
+                      " body: entry.field.body,\n"
+                      '              value: entry.box ? entry.box.value : ""};', page)
+        # A Save sends the text too, so its pending autosave is dropped.
+        self.assertIn('  save.addEventListener("click", function () {\n'
+                      "    /* This save sends the textarea's text too, so no autosave is needed. */\n"
+                      "    clearTimeout(timer);", page)
+        self.assertIn("    fileText.readOnly = true;\n    lockBoxes(true);\n    post(fields, function (result) {", page)
+        # A refused Save unlocks them; a saved one rebuilds them unlocked.
+        self.assertIn("      fileText.readOnly = false;\n      lockBoxes(false);", page)
+        self.assertIn("        entry.box.disabled = locked;", page)
+        self.assertIn("      showBoxes(result);\n"
+                      '      messages.textContent = "";\n'
+                      "      failureShown = false;\n"
+                      '      messages.appendChild(element("p", "Saved."));', page)
+        self.assertIn("      result.warnings.forEach(function (warning) {\n"
+                      '        messages.appendChild(element("pre", "Warning: " + warning));', page)
+
+    def test_a_refused_save_keeps_the_boxes_and_base(self):
+        # Not rebuilt: the boxes keep their values, base stays, Save unlocks.
+        page = self.get_page()
+        self.assertIn("    function notSaved(status, text) {\n"
+                      "      /* The boxes keep their values and base stays, so the user can retry. */\n"
+                      "      done();\n"
+                      "      failed();\n"
+                      '      messages.textContent = "";\n'
+                      '      messages.appendChild(element("p", "Not saved: " + text));', page)
+
+    def test_autosave_two_seconds_after_typing_stops(self):
+        # N4-08: each keystroke restarts the timer; it sends the text alone.
+        page = self.get_page()
+        self.assertIn("var AUTOSAVE_DELAY = 2000;", page)
+        self.assertIn('  fileText.addEventListener("input", function () {\n'
+                      '    savedLine.textContent = "not saved yet";\n'
+                      "    textSaved = false;\n"
+                      "    if (stopped) {\n"
+                      "      return;\n"
+                      "    }\n"
+                      "    clearTimeout(timer);\n"
+                      "    timer = setTimeout(autosave, AUTOSAVE_DELAY);", page)
+        self.assertIn("    post([], function (result) {", page)
+        # One save at a time: an autosave due during one waits for it.
+        self.assertIn("    if (busy) {\n      timer = setTimeout(autosave, AUTOSAVE_DELAY);\n      return;", page)
+
+    def test_saved_time_shows_only_after_a_save_of_the_text_shown(self):
+        page = self.get_page()
+        self.assertIn("        if (fileText.value === sent) {\n"
+                      '          savedLine.textContent = "saved at " + new Date().toTimeString().slice(0, 8);',
+                      page)
+
+    def test_autosave_leaves_boxes_holding_values_alone(self):
+        page = self.get_page()
+        self.assertIn("      if (!boxesHoldValues()) {\n        showBoxes(result);", page)
+        self.assertIn('return entry.box !== null && entry.box.value !== "";', page)
+
+    def test_changed_on_disk_stops_autosave_and_offers_reload(self):
+        # N5 F1 (C): a 409 from autosave or Save stops autosave; Reload
+        # shows the file from disk and keeps the textarea's text.
+        page = self.get_page()
+        self.assertIn("      if (status === 409) {\n        offerReload();", page)
+        self.assertIn("  function offerReload() {\n"
+                      "    stopped = true;\n"
+                      "    clearTimeout(timer);", page)
+        self.assertIn("      var mine = unsavedText();\n"
+                      '      fetch("/file?path=" + encodeURIComponent(data.path)).then(function (response) {',
+                      page)
+        # A Reload answering after the view was left draws nothing.
+        self.assertIn("            if (openView === view) {\n              showFillIn(fresh, mine);", page)
+        # A failed reload keeps the view, and so the text.
+        self.assertIn('messages.appendChild(element("p", "Not reloaded: " + text));', page)
+
+    def test_leaving_a_file_saves_its_text_first(self):
+        # Adversary C7: a file's own view saves its text before the page
+        # moves on, so a refusal shows where the text is, never in a view
+        # that is already gone.
+        page = self.get_page()
+        self.assertIn("goTo(function () {\n"
+                      '        getJson("/file?path=" + encodeURIComponent(path), showFillIn);', page)
+        self.assertIn("goTo(function () {\n    getJson(\"/new-data\", showNewForm);", page)
+        self.assertIn("goTo(function () {\n    getJson(\"/checklists\", showChecklistList);", page)
+        self.assertIn("  openView.leave(function () {\n    openView = null;\n    next();", page)
+        self.assertIn("  var view = {leave: leave, holdsUnsaved: holdsUnsaved};\n  openView = view;\n", page)
+        # Saved text leaves at once; a save on its way is waited for; a
+        # refused or stopped one keeps the page here with a way out.
+        self.assertIn("    if (textSaved) {\n      quit(next);\n      return;\n    }\n"
+                      "    if (stopped || failureShown) {\n      offerLeave(next);", page)
+        self.assertIn('var away = leaveRow.appendChild(element("button", "Leave without saving"));', page)
+        # Chunk N5 CR-1: a view the user left sends nothing more.
+        self.assertIn('    away.addEventListener("click", function () {\n      quit(next);', page)
+        self.assertIn("  function quit(next) {\n"
+                      "    stopped = true;\n"
+                      "    clearTimeout(timer);\n"
+                      "    timer = null;\n"
+                      "    next();", page)
+        self.assertEqual(page.count("quit(next);"), 2)
+        # Only a save of exactly the text shown counts as saved.
+        self.assertIn("    textSaved = false;", page)
+        self.assertIn('          savedLine.textContent = "saved at " + new Date().toTimeString().slice(0, 8);\n'
+                      "          textSaved = true;", page)
+
+    def test_box_values_show_unsaved_until_saved(self):
+        # N4-09: the indicator follows the boxes: on while any holds a
+        # value, off once a Save rebuilds them empty (showBoxes()).
+        page = self.get_page()
+        self.assertIn('unsavedMark.textContent = boxesHoldValues() ? " unsaved" : "";', page)
+        self.assertIn('  boxes.addEventListener("input", showUnsavedMark);\n'
+                      '  boxes.addEventListener("change", showUnsavedMark);', page)
+        self.assertIn("    saveRow.appendChild(unsavedMark);\n    showUnsavedMark();", page)
+
+    def test_leaving_with_box_values_asks_once(self):
+        # N4-09: one warning while boxes hold values; staying changes
+        # nothing; leaving never puts the values in the file.
+        page = self.get_page()
+        # Chunk N5 CR-2: a save on its way is waited for; a Save's
+        # warnings keep the page here.
+        self.assertIn("  function leave(next) {\n"
+                      "    if (busy) {\n"
+                      "      afterSave = function () {\n"
+                      "        if (!warningsShown) {\n"
+                      "          leave(next);\n"
+                      "        }\n"
+                      "      };\n"
+                      "      return;\n"
+                      "    }\n"
+                      "    if (boxesHoldValues() && !window.confirm(\"Your box values aren't saved"
+                      " and will be lost. Leave anyway?\")) {\n"
+                      "      return;\n"
+                      "    }\n"
+                      "    leaveText(next);", page)
+        self.assertEqual(page.count("window.confirm("), 1)
+        self.assertIn("    var sent = fileText.value;\n    warningsShown = false;", page)
+        self.assertIn("      warningsShown = result.warnings.length > 0;", page)
+
+    def test_closing_the_page_warns_for_unsaved_values_or_text(self):
+        page = self.get_page()
+        # N5 L6: also while the text can't be saved after a refusal.
+        self.assertIn("    return boxesHoldValues() || (!textSaved && (stopped || failureShown));", page)
+        self.assertIn('window.addEventListener("beforeunload", function (event) {\n'
+                      "  if (openView !== null && openView.holdsUnsaved()) {\n"
+                      "    event.preventDefault();\n"
+                      '    event.returnValue = "";', page)
+
+    def test_unsaved_text_also_keeps_box_values(self):
+        # N5 F1d: Reload rebuilds the boxes, so their values go under the text.
+        page = self.get_page()
+        self.assertIn("      if (entry.box !== null && entry.box.value !== \"\") {", page)
+        self.assertIn('        text += entry.field.name + ": " + entry.box.value + "\\n";', page)
+
+    def test_unsaved_text_is_kept_read_only_with_a_copy_button(self):
+        page = self.get_page()
+        self.assertIn("    kept.readOnly = true;\n", page)
+        self.assertIn('var row = addField(main, "Your unsaved text", kept);', page)
+        self.assertIn('var copy = row.appendChild(element("button", "Copy"));', page)
+        self.assertIn("navigator.clipboard.writeText(text).then(function () {", page)
+        self.assertIn('" Not copied (" + error + "): select the text and copy it by hand."', page)
 
 
 if __name__ == "__main__":

@@ -1258,6 +1258,19 @@ def marker_controls(text):
     return controls
 
 
+def marker_status(text):
+    """Return the fill-in status line: "n markers left (k of them notes)" or "complete".
+
+    Counts what listed_matches() lists, so n is the number of boxes and
+    notes the view shows: a repeated [[NAME]] counts once, as it has one box.
+    """
+    listed = listed_matches(text)
+    if not listed:
+        return "complete"
+    notes = [match for match in listed if is_note(match.group(0))]
+    return str(len(listed)) + " markers left (" + str(len(notes)) + " of them notes)"
+
+
 # The fill-in view's format checks by marker name (Fill-in Warnings):
 # (regex, warning). Each is used with fullmatch(), so trailing text or a
 # trailing newline warns. Digits are [0-9], since \d also matches other
@@ -1317,11 +1330,14 @@ def marker_targets(text, fields):
     writer may have edited in the textarea since that scan.
     - An empty value changes nothing, so it is never checked.
     - A NOTE is never replaced (Fill-in: the app never removes a note).
+    - A filled marker that is gone from text warns with the value as typed,
+      since its box goes with the rescan (DECISIONS 2026-10-29 N5 F3b).
     - A plain [[NAME]] is keyed by name: its value goes at every copy.
     - A marker with a body is keyed by position: the k-th of the n identical
       copies in the scan goes at the k-th copy in text. If text no longer
       holds exactly n copies, the copies can't be matched up safely, so none
-      of them is replaced and each filled one warns.
+      of them is replaced and each filled one warns with its value: its box
+      comes back empty with the rescan (DECISIONS 2026-10-29 N5 F3c).
     """
     now = {}
     for match in MARKER_RE.finditer(text):
@@ -1340,13 +1356,16 @@ def marker_targets(text, fields):
             continue
         starts = now.get(marker, [])
         if not starts:
-            warnings.append(marker + " is no longer in the text: value not saved")
+            # The value, so the writer can copy it back in (N5 F3b).
+            warnings.append(marker + " is no longer in the text: value not saved: " + value)
         elif field["body"] is None:
             for start in starts:
                 targets[start] = value
         elif len(starts) != scanned[marker]:
+            # The value too, as above (N5 F3c).
             warnings.append(marker + " is in the text " + str(len(starts)) + " times, not "
-                            + str(scanned[marker]) + ", so it can't be told apart: value not saved")
+                            + str(scanned[marker]) + ", so it can't be told apart: value not saved: "
+                            + value)
         else:
             targets[starts[occurrence]] = value
     return targets, warnings
@@ -1471,7 +1490,9 @@ def save_editable_file(root, logdir, name, path, text, base):
 
 
 def send_editable_file(handler):
-    """GET /file?path=<own file>: {"path", "text", "fields"}, fields from marker_controls().
+    """GET /file?path=<own file>: {"path", "text", "fields", "status"}.
+
+    fields is marker_controls()'s list, status is marker_status()'s line.
 
     text is also the "base" the first save sends back (Chunk N4 D4).
     """
@@ -1488,7 +1509,8 @@ def send_editable_file(handler):
     except (compile.InputError, OSError) as error:
         send_text(handler, 500, "can't read the file: " + str(error))
         return
-    send_json(handler, 200, {"path": paths[0], "text": text, "fields": marker_controls(text)})
+    send_json(handler, 200, {"path": paths[0], "text": text, "fields": marker_controls(text),
+                             "status": marker_status(text)})
 
 
 # Big enough for a finding with pasted log output, small enough that one
@@ -1538,9 +1560,10 @@ def read_save_request(handler):
 def save_file(handler):
     """POST /file: apply the boxes' values, save, rescan (Fill-in Save).
 
-    Answers {"path", "text", "fields", "warnings"}: the saved text, its new
-    fields, then apply_marker_values()'s warnings and each filled box's
-    format warnings as "<name>: <warning>". Warnings never stop the save.
+    Answers {"path", "text", "fields", "status", "warnings"}: the saved text,
+    its new fields and status line, then apply_marker_values()'s warnings
+    and each filled box's format warnings as "<name>: <warning>" (the page
+    lists them under the status line). Warnings never stop the save.
     The saved text is the base for the next save. A file changed on disk
     since base was read gets 409 and nothing is written (Chunk N4 D4).
     """
@@ -1572,7 +1595,8 @@ def save_file(handler):
         send_text(handler, 500, "not saved: " + str(error))
         return
     send_json(handler, 200, {"path": save["path"], "text": text,
-                             "fields": marker_controls(text), "warnings": warnings})
+                             "fields": marker_controls(text), "status": marker_status(text),
+                             "warnings": warnings})
 
 
 # Where send_page() puts this run's token in the page.
@@ -1607,6 +1631,7 @@ label input { margin-right: 0.5rem; }
 pre { margin: 0; min-height: 1.2em; white-space: pre-wrap; }
 /* The file list: full paths wrap rather than widen the column. */
 #file-list div { margin-bottom: 0.25rem; overflow-wrap: anywhere; }
+#file-list button { margin-bottom: 0; max-width: 100%; overflow-wrap: anywhere; }
 /* The file just created, so it can be found in the list. */
 #file-list .selected { font-weight: bold; }
 form div { margin-bottom: 0.5rem; }
@@ -1732,14 +1757,20 @@ function saveTick(key, box, status) {
 var fileList = document.getElementById("file-list");
 
 /* The person's own files, in the order /files gives them, which groups
-   them by prefix. selected is a path to mark, e.g. the file just created;
-   opening a file comes with the fill-in view (N4). */
+   them by prefix. Clicking one opens it in the fill-in view. selected is a
+   path to mark, e.g. the file just created. */
 function showFiles(data, selected) {
   fileList.textContent = "";
   data.files.forEach(function (path) {
-    var item = fileList.appendChild(element("div", path));
+    var button = fileList.appendChild(element("div")).appendChild(element("button", path));
+    button.type = "button";
+    button.addEventListener("click", function () {
+      goTo(function () {
+        getJson("/file?path=" + encodeURIComponent(path), showFillIn);
+      });
+    });
     if (path === selected) {
-      item.className = "selected";
+      button.className = "selected";
     }
   });
   /* A link pointing outside isn't listed, but its reason always shows. */
@@ -1898,12 +1929,446 @@ function showNewForm(data) {
   });
 }
 
+/* The box for one marker that isn't a NOTE (Fill-in "What each marker
+   becomes"); field.control comes from the server's marker_controls(). */
+function markerBox(field) {
+  if (field.control === "dropdown") {
+    var list = element("select");
+    /* An empty first choice, so an untouched dropdown leaves its marker in place. */
+    var none = list.appendChild(element("option", "(not chosen)"));
+    none.value = "";
+    field.options.forEach(function (text) {
+      var option = list.appendChild(element("option", text));
+      option.value = text;
+    });
+    return list;
+  }
+  if (field.control === "textarea") {
+    var big = element("textarea");
+    big.rows = 4;
+    big.cols = 60;
+    return big;
+  }
+  var line = element("input");
+  line.type = "text";
+  return line;
+}
+
+/* Milliseconds after the last keystroke before the file autosaves (Fill-in textarea). */
+var AUTOSAVE_DELAY = 2000;
+
+/* The open file's {leave, holdsUnsaved}, or null (showFillIn()). Every
+   move to another view goes through its leave(), so box values not saved
+   get a warning and the file's unsaved text is saved first. */
+var openView = null;
+
+/* Show another view with next(), once the open file lets the page go. */
+function goTo(next) {
+  if (openView === null) {
+    next();
+    return;
+  }
+  openView.leave(function () {
+    openView = null;
+    next();
+  });
+}
+
+/* Closing the tab, reloading or going to another site warns while boxes
+   hold values (Fill-in textarea), or while the file's text can't be saved
+   (DECISIONS 2026-10-29 N5 L6). Text that is only waiting for its autosave
+   doesn't warn. The browser shows its own wording. */
+window.addEventListener("beforeunload", function (event) {
+  if (openView !== null && openView.holdsUnsaved()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+/* The fill-in view: a box for every marker still in the file, in the order
+   they appear, then the whole file in a textarea. The file's text only ever
+   goes in through .value and every label, guidance and note through
+   textContent, so "<script>" in a file shows as text and never runs.
+   data is GET /file's answer. unsaved is text kept from before a Reload
+   (N5 F1), shown in a read-only box of its own. */
+function showFillIn(data, unsaved) {
+  /* The text the next save starts from (Chunk N4 D4). The text as sent,
+     not the textarea's .value: a browser turns "\\r\\n" into "\\n" there, so
+     a Windows file would never match. */
+  var base = data.text;
+  /* Every field with its box; a NOTE has none. */
+  var entries = [];
+  /* The autosave waiting for typing to stop, if any. */
+  var timer = null;
+  /* True while a save is on its way: one at a time, so each starts from
+     the base the one before it left. */
+  var busy = false;
+  /* Set by a "changed on disk" answer (N5 F1), or by leaving this view
+     (Chunk N5 CR-1): no more autosaves. */
+  var stopped = false;
+  /* True while messages shows why a save failed. */
+  var failureShown = false;
+  /* False from a keystroke until a save of exactly that text works. */
+  var textSaved = true;
+  /* Runs once the save on its way has answered, e.g. to finish leaving. */
+  var afterSave = null;
+  /* True when the last Save came back with warnings, so leaving waits. */
+  var warningsShown = false;
+  var view = {leave: leave, holdsUnsaved: holdsUnsaved};
+  openView = view;
+
+  main.textContent = "";
+  main.appendChild(element("h2", data.path));
+  var statusLine = main.appendChild(element("p"));
+  /* After a Save: that it saved, then each warning from the server (N5 F3),
+     which starts with its box's name. Or why a save failed. */
+  var messages = main.appendChild(element("div"));
+  /* Why the page stays on this file, with a way to leave anyway. */
+  var leaveRow = main.appendChild(element("div"));
+  if (unsaved !== undefined) {
+    showUnsaved(unsaved);
+  }
+  var boxes = main.appendChild(element("form"));
+  var save = element("button", "Save");
+  save.type = "button";
+  /* The "unsaved" indicator beside Save, shown while boxes hold values. */
+  var unsavedMark = element("span", "");
+  var fileText = element("textarea");
+  fileText.rows = 30;
+  fileText.cols = 100;
+  fileText.value = data.text;
+  addField(main, "The file", fileText);
+  /* "saved at HH:MM:SS", or "not saved yet" after typing. */
+  var savedLine = main.appendChild(element("p", ""));
+  showBoxes(data);
+
+  /* The status line and a box per marker, from a GET or a save's answer. */
+  function showBoxes(answer) {
+    statusLine.textContent = answer.status;
+    boxes.textContent = "";
+    entries = [];
+    answer.fields.forEach(function (field) {
+      if (field.control === "note") {
+        /* Highlighted help, never a box: the writer deletes the note in the
+           file below. A <pre>, so a note's example keeps its lines. */
+        boxes.appendChild(element("pre")).appendChild(element("mark", "NOTE:" + field.body));
+        entries.push({field: field, box: null});
+        return;
+      }
+      var box = markerBox(field);
+      entries.push({field: field, box: box});
+      var row = addField(boxes, field.name, box);
+      if (field.guidance !== undefined) {
+        row.appendChild(element("p", field.guidance));
+      }
+    });
+    var saveRow = boxes.appendChild(element("div"));
+    saveRow.appendChild(save);
+    saveRow.appendChild(unsavedMark);
+    showUnsavedMark();
+  }
+
+  /* Lock or unlock every box, e.g. for a Save: its answer rebuilds them,
+     so a value typed while it's on its way would be lost. */
+  function lockBoxes(locked) {
+    entries.forEach(function (entry) {
+      if (entry.box !== null) {
+        entry.box.disabled = locked;
+      }
+    });
+  }
+
+  /* A box value is unsaved until a Save puts it in the file and rebuilds
+     the boxes empty; emptying a box again leaves nothing to save. */
+  function showUnsavedMark() {
+    unsavedMark.textContent = boxesHoldValues() ? " unsaved" : "";
+  }
+
+  /* True if any box holds a value. A Save puts them in the file and
+     rebuilds the boxes empty, so a value in a box is not saved yet. */
+  function boxesHoldValues() {
+    return entries.some(function (entry) {
+      return entry.box !== null && entry.box.value !== "";
+    });
+  }
+
+  /* What a Reload would lose: the textarea's text, then each box value
+     (not saved yet, since a Save empties the boxes), one line each, e.g.
+     "HOST: dc01" (DECISIONS 2026-10-29 N5 F1d). */
+  function unsavedText() {
+    var text = fileText.value;
+    entries.forEach(function (entry) {
+      if (entry.box !== null && entry.box.value !== "") {
+        /* Each value starts on a line of its own. */
+        if (text !== "" && text.slice(-1) !== "\\n") {
+          text += "\\n";
+        }
+        text += entry.field.name + ": " + entry.box.value + "\\n";
+      }
+    });
+    return text;
+  }
+
+  /* The text from before a Reload, read-only, with a Copy button (N5 F1). */
+  function showUnsaved(text) {
+    var kept = element("textarea");
+    kept.rows = 10;
+    kept.cols = 100;
+    kept.readOnly = true;
+    kept.value = text;
+    var row = addField(main, "Your unsaved text", kept);
+    var copy = row.appendChild(element("button", "Copy"));
+    copy.type = "button";
+    var copied = row.appendChild(element("span", ""));
+    copy.addEventListener("click", function () {
+      navigator.clipboard.writeText(text).then(function () {
+        copied.textContent = " Copied.";
+      }, function (error) {
+        copied.textContent = " Not copied (" + error + "): select the text and copy it by hand.";
+      });
+    });
+  }
+
+  /* After "changed on disk": stop autosaving and offer Reload. Reload
+     shows the file as it is now and keeps this textarea's text (N5 F1). */
+  function offerReload() {
+    stopped = true;
+    clearTimeout(timer);
+    timer = null;
+    var reload = messages.appendChild(element("button", "Reload"));
+    reload.type = "button";
+    reload.addEventListener("click", function () {
+      var mine = unsavedText();
+      fetch("/file?path=" + encodeURIComponent(data.path)).then(function (response) {
+        if (response.ok) {
+          return response.json().then(function (fresh) {
+            /* Only if this view is still the one open: the user may have
+               left it while the Reload was on its way (N4-09 round 3). */
+            if (openView === view) {
+              showFillIn(fresh, mine);
+            }
+          });
+        }
+        /* Not reloaded: the view stays, so the text is still here. */
+        return response.text().then(function (text) {
+          messages.appendChild(element("p", "Not reloaded: " + text));
+        });
+      }).catch(function (error) {
+        messages.appendChild(element("p", "Not reloaded: " + error));
+      });
+    });
+  }
+
+  /* What the close-tab warning covers: box values, or text that can't be
+     saved after a refusal, until a save works or Reload (N5 L6). */
+  function holdsUnsaved() {
+    return boxesHoldValues() || (!textSaved && (stopped || failureShown));
+  }
+
+  /* Leaving for another view (goTo()). A save on its way is waited for
+     first: its answer decides whether the boxes still hold values, and a
+     Save's warnings keep the page here so they are seen; the next click
+     leaves (Chunk N5 CR-2). Then box values not saved get the one warning;
+     staying keeps everything as it is, and leaving doesn't put them in the
+     file. Then the text is saved (leaveText()). */
+  function leave(next) {
+    if (busy) {
+      afterSave = function () {
+        if (!warningsShown) {
+          leave(next);
+        }
+      };
+      return;
+    }
+    if (boxesHoldValues() && !window.confirm("Your box values aren't saved and will be lost. Leave anyway?")) {
+      return;
+    }
+    leaveText(next);
+  }
+
+  /* Leave for good: this view sends nothing more, e.g. no autosave of
+     text typed after its leave row showed (Chunk N5 CR-1). */
+  function quit(next) {
+    stopped = true;
+    clearTimeout(timer);
+    timer = null;
+    next();
+  }
+
+  /* Unsaved text is saved first and the page moves on only once that
+     works. Otherwise it stays here, where the text and the reason (and
+     Reload, for "changed on disk") can be seen. No save is on its way
+     here: leave() waited for it. */
+  function leaveText(next) {
+    clearTimeout(timer);
+    timer = null;
+    if (textSaved) {
+      quit(next);
+      return;
+    }
+    if (stopped || failureShown) {
+      offerLeave(next);
+      return;
+    }
+    afterSave = function () {
+      leaveText(next);
+    };
+    post([], function () {}, function () {});
+  }
+
+  /* The text can't be saved: say so, and let the user leave anyway. */
+  function offerLeave(next) {
+    leaveRow.textContent = "";
+    leaveRow.appendChild(element("p", "This file's text isn't saved, so the page stays here."));
+    var away = leaveRow.appendChild(element("button", "Leave without saving"));
+    away.type = "button";
+    away.addEventListener("click", function () {
+      quit(next);
+    });
+  }
+
+  /* Run what was waiting for the save on its way, if anything. */
+  function runAfterSave() {
+    var waiting = afterSave;
+    afterSave = null;
+    if (waiting !== null) {
+      waiting();
+    }
+  }
+
+  /* POST one save of the textarea's text with these fields. saved(result,
+     sent) runs after a save, failed() after a refusal. */
+  function post(fields, saved, failed) {
+    var sent = fileText.value;
+    warningsShown = false;
+    busy = true;
+    save.disabled = true;
+    function done() {
+      busy = false;
+      save.disabled = false;
+    }
+    function notSaved(status, text) {
+      /* The boxes keep their values and base stays, so the user can retry. */
+      done();
+      failed();
+      messages.textContent = "";
+      messages.appendChild(element("p", "Not saved: " + text));
+      failureShown = true;
+      if (status === 409) {
+        offerReload();
+      }
+      runAfterSave();
+    }
+    fetch("/file", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-CPTC-Token": TOKEN},
+      body: JSON.stringify({path: data.path, text: sent, base: base, fields: fields})
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(function (text) {
+          notSaved(response.status, text);
+        });
+      }
+      return response.json().then(function (result) {
+        done();
+        /* The saved text is the next base. */
+        base = result.text;
+        /* Only if nothing was typed since: newer typing has its own autosave coming. */
+        if (fileText.value === sent) {
+          savedLine.textContent = "saved at " + new Date().toTimeString().slice(0, 8);
+          textSaved = true;
+          leaveRow.textContent = "";
+        }
+        saved(result, sent);
+        runAfterSave();
+      });
+    }).catch(function (error) {
+      notSaved(0, "" + error);
+    });
+  }
+
+  /* Autosave: the textarea's text alone, no box values (fields []). */
+  function autosave() {
+    timer = null;
+    if (stopped) {
+      return;
+    }
+    if (busy) {
+      timer = setTimeout(autosave, AUTOSAVE_DELAY);
+      return;
+    }
+    post([], function (result) {
+      /* An old failure is no longer true once a save works. */
+      if (failureShown) {
+        messages.textContent = "";
+        failureShown = false;
+      }
+      /* The boxes are rebuilt from the rescan only while none holds a
+         value, so an autosave never wipes what the user typed in them. */
+      if (!boxesHoldValues()) {
+        showBoxes(result);
+      }
+    }, function () {});
+  }
+
+  /* Typing in a box, or picking from a dropdown. */
+  boxes.addEventListener("input", showUnsavedMark);
+  boxes.addEventListener("change", showUnsavedMark);
+
+  fileText.addEventListener("input", function () {
+    savedLine.textContent = "not saved yet";
+    textSaved = false;
+    if (stopped) {
+      return;
+    }
+    clearTimeout(timer);
+    timer = setTimeout(autosave, AUTOSAVE_DELAY);
+  });
+
+  save.addEventListener("click", function () {
+    /* This save sends the textarea's text too, so no autosave is needed. */
+    clearTimeout(timer);
+    timer = null;
+    /* Every field in the scan's order, notes too, so the server can match
+       repeated markers by position (marker_targets()). */
+    var fields = entries.map(function (entry) {
+      return {name: entry.field.name, marker: entry.field.marker, body: entry.field.body,
+              value: entry.box ? entry.box.value : ""};
+    });
+    /* Read-only and locked until the answer, so nothing typed in the file
+       or the boxes meanwhile is lost when the saved text replaces them. */
+    fileText.readOnly = true;
+    lockBoxes(true);
+    post(fields, function (result) {
+      fileText.value = result.text;
+      fileText.readOnly = false;
+      showBoxes(result);
+      messages.textContent = "";
+      failureShown = false;
+      messages.appendChild(element("p", "Saved."));
+      /* A <pre>, so a value quoted in a warning keeps its lines and
+         spaces when copied back (N5 F3b). */
+      result.warnings.forEach(function (warning) {
+        messages.appendChild(element("pre", "Warning: " + warning));
+      });
+      warningsShown = result.warnings.length > 0;
+    }, function () {
+      fileText.readOnly = false;
+      lockBoxes(false);
+    });
+  });
+}
+
 document.getElementById("new-button").addEventListener("click", function () {
-  getJson("/new-data", showNewForm);
+  goTo(function () {
+    getJson("/new-data", showNewForm);
+  });
 });
 
 document.getElementById("checklists-button").addEventListener("click", function () {
-  getJson("/checklists", showChecklistList);
+  goTo(function () {
+    getJson("/checklists", showChecklistList);
+  });
 });
 
 loadFiles();
@@ -1931,8 +2396,10 @@ class NotebookHandler(BaseHTTPRequestHandler):
 
     # Seconds a connection may wait for more of its request. The server
     # answers one request at a time, so a body shorter than its
-    # Content-Length would otherwise hold it forever.
-    timeout = 10
+    # Content-Length would otherwise hold it forever. Short, because an idle
+    # connection a browser opens early holds every other request this long
+    # (DECISIONS 2026-10-29 N5 F2).
+    timeout = 2
 
     def do_GET(self):
         self.answer("GET", GET_ROUTES)
