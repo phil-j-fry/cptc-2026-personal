@@ -10,7 +10,9 @@ import http.client
 import io
 import json
 import os
+import shutil
 import socket
+import stat
 import string
 import threading
 import unittest
@@ -3090,6 +3092,884 @@ class PageParts(HTMLParser):
         hidden = {"title", "style", "script"}
         if data.strip() and not hidden.intersection(self.open):
             self.visible_text.append(data.strip())
+
+
+class ScanMarkerTests(unittest.TestCase):
+    """N4-01: scan_markers(), the fill-in view's field list (OQ-13)."""
+
+    def test_uses_compile_helper_objects(self):
+        # The same objects, not copies, so the two tools can't drift apart.
+        self.assertIs(notebook.MARKER_RE, compile.MARKER_RE)
+        self.assertIs(notebook.strip_markers, compile.strip_markers)
+
+    def test_compile_imports_nothing_from_notebook(self):
+        tree = ast.parse((support.TOOLS_DIR / "compile.py").read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module)
+        self.assertNotIn("notebook", imported)
+
+    def test_each_kind_in_order_with_multiline_note(self):
+        text = ("# [[FINDING_ID]]: title\n"
+                "- **Severity:** [[CHOOSE: Critical / High / Low]]\n"
+                "[[NOTE: An example:\n"
+                "    nmap -p 445 10.0.0.5\n"
+                "Delete this note.]]\n"
+                "[[TODO: who ran it?]]\n")
+        self.assertEqual(notebook.scan_markers(text), [
+            {"name": "FINDING_ID", "body": None, "marker": "[[FINDING_ID]]"},
+            {"name": "CHOOSE", "body": " Critical / High / Low",
+             "marker": "[[CHOOSE: Critical / High / Low]]"},
+            {"name": "NOTE", "body": " An example:\n    nmap -p 445 10.0.0.5\nDelete this note.",
+             "marker": "[[NOTE: An example:\n    nmap -p 445 10.0.0.5\nDelete this note.]]"},
+            {"name": "TODO", "body": " who ran it?", "marker": "[[TODO: who ran it?]]"},
+        ])
+
+    def test_repeated_name_shown_once_at_first_place(self):
+        text = "[[HOST]] [[TODO: a]] [[HOST]] [[NOTE: b]] [[PORT]] [[HOST]] [[CHOOSE: x / y]]"
+        self.assertEqual(notebook.scan_markers(text), [
+            {"name": "HOST", "body": None, "marker": "[[HOST]]"},
+            {"name": "TODO", "body": " a", "marker": "[[TODO: a]]"},
+            {"name": "NOTE", "body": " b", "marker": "[[NOTE: b]]"},
+            {"name": "PORT", "body": None, "marker": "[[PORT]]"},
+            {"name": "CHOOSE", "body": " x / y", "marker": "[[CHOOSE: x / y]]"},
+        ])
+
+    def test_repeated_marker_with_body_listed_each_time(self):
+        # Each is filled on its own (keyed by position), so none is dropped.
+        text = "[[TODO: same]]\n[[TODO: same]]\n"
+        self.assertEqual(notebook.scan_markers(text), [
+            {"name": "TODO", "body": " same", "marker": "[[TODO: same]]"},
+            {"name": "TODO", "body": " same", "marker": "[[TODO: same]]"},
+        ])
+
+    def test_bash_test_ignored(self):
+        text = "[[HOST]]\nif [[ -f x ]]; then echo y; fi\n[[TODO: next]]\n"
+        self.assertEqual(notebook.scan_markers(text), [
+            {"name": "HOST", "body": None, "marker": "[[HOST]]"},
+            {"name": "TODO", "body": " next", "marker": "[[TODO: next]]"},
+        ])
+
+    def test_unclosed_marker_does_not_swallow_the_next(self):
+        text = "[[NOTE: never closed\n[[HOST]]\n"
+        self.assertEqual(notebook.scan_markers(text), [
+            {"name": "HOST", "body": None, "marker": "[[HOST]]"},
+        ])
+
+    def test_no_markers(self):
+        self.assertEqual(notebook.scan_markers("plain text, done\n"), [])
+
+
+class MarkerControlTests(unittest.TestCase):
+    """N4-02: marker_controls(), each marker's control and box size."""
+
+    def controls(self, text):
+        return [(c["name"], c["control"]) for c in notebook.marker_controls(text)]
+
+    def test_name_in_labelled_line_is_one_line_input(self):
+        self.assertEqual(notebook.marker_controls("Intro.\n- **Host:** [[HOST]]\n"), [
+            {"name": "HOST", "body": None, "marker": "[[HOST]]", "control": "input"},
+        ])
+
+    def test_marker_alone_on_its_line_is_textarea(self):
+        self.assertEqual(self.controls("Intro.\n  [[SUMMARY]] \t\nMore.\n"),
+                         [("SUMMARY", "textarea")])
+
+    def test_line_after_heading_is_textarea_even_with_a_label(self):
+        for heading in ("# Top", "###### Deep"):
+            with self.subTest(heading=heading):
+                text = heading + "\n- **Source IP:** [[SOURCE_IP]]\n"
+                self.assertEqual(self.controls(text), [("SOURCE_IP", "textarea")])
+
+    def test_marker_inside_heading_is_one_line(self):
+        self.assertEqual(self.controls("# [[FINDING_ID]]: title\n"), [("FINDING_ID", "input")])
+        # Even a heading that is only the marker, right under another heading.
+        self.assertEqual(self.controls("# Top\n## [[TITLE]]\n"), [("TITLE", "input")])
+
+    def test_choose_is_dropdown_with_literal_options(self):
+        self.assertEqual(notebook.marker_controls("[[CHOOSE: first / second / third]]\n"), [
+            {"name": "CHOOSE", "body": " first / second / third",
+             "marker": "[[CHOOSE: first / second / third]]",
+             "control": "dropdown", "options": ["first", "second", "third"]},
+        ])
+
+    def test_todo_is_input_with_guidance_sized_by_its_line(self):
+        marker = "[[TODO: describe who verified it]]"
+        self.assertEqual(notebook.marker_controls("- **Verified by:** " + marker + "\n"), [
+            {"name": "TODO", "body": " describe who verified it", "marker": marker,
+             "control": "input", "guidance": "describe who verified it"},
+        ])
+        self.assertEqual(notebook.marker_controls("Text.\n" + marker + "\n"), [
+            {"name": "TODO", "body": " describe who verified it", "marker": marker,
+             "control": "textarea", "guidance": "describe who verified it"},
+        ])
+
+    def test_note_is_help_never_editable(self):
+        note = "[[NOTE: Example:\n    nmap -p 445 host\nDelete this.]]"
+        for text in (note + "\n", "# Steps\n" + note + "\n", "- **Host:** " + note + "\n"):
+            with self.subTest(text=text):
+                self.assertEqual(notebook.marker_controls(text), [
+                    {"name": "NOTE", "body": " Example:\n    nmap -p 445 host\nDelete this.",
+                     "marker": note, "control": "note"},
+                ])
+
+    def test_notes_on_the_same_line_are_ignored_for_size(self):
+        text = "Text.\n[[NOTE: before]] [[STEPS]] [[NOTE: after]]\n"
+        self.assertEqual(self.controls(text), [
+            ("NOTE", "note"), ("STEPS", "textarea"), ("NOTE", "note"),
+        ])
+
+    def test_multiline_note_ending_on_the_markers_line_is_ignored(self):
+        text = "Text.\n[[NOTE: one\ntwo]] [[STEPS]]\n"
+        self.assertEqual(self.controls(text), [("NOTE", "note"), ("STEPS", "textarea")])
+
+    def test_two_markers_on_a_line_are_one_line(self):
+        self.assertEqual(self.controls("Text.\n[[PREVIOUS_ID]] -> [[NEXT_ID]]\n"),
+                         [("PREVIOUS_ID", "input"), ("NEXT_ID", "input")])
+
+    def test_repeated_name_sized_by_its_first_place(self):
+        self.assertEqual(self.controls("- **Host:** [[HOST]]\nText.\n[[HOST]]\n"),
+                         [("HOST", "input")])
+        self.assertEqual(self.controls("Text.\n[[HOST]]\n- **Host:** [[HOST]]\n"),
+                         [("HOST", "textarea")])
+
+    def test_windows_line_endings_size_the_same(self):
+        self.assertEqual(self.controls("Text.\r\n[[SUMMARY]]\r\n- **Host:** [[HOST]]\r\n"),
+                         [("SUMMARY", "textarea"), ("HOST", "input")])
+
+    def test_marker_on_first_line_with_text_is_one_line(self):
+        self.assertEqual(self.controls("Host: [[HOST]]"), [("HOST", "input")])
+
+    def test_bare_note_or_choose_is_a_plain_name(self):
+        self.assertEqual(self.controls("- **A:** [[NOTE]]\n- **B:** [[CHOOSE]]\n"),
+                         [("NOTE", "input"), ("CHOOSE", "input")])
+
+    def test_fields_match_scan_markers(self):
+        # Fake text with every kind and a repeated name, so both functions'
+        # dedupe and order are compared.
+        text = ("# [[FINDING_ID]]: [[TITLE]]\n"
+                "- **Severity:** [[CHOOSE: High / Low]]\n"
+                "[[NOTE: one\ntwo]]\n"
+                "[[TODO: who?]] and [[FINDING_ID]]\n"
+                "[[STEPS]]\n")
+        controls = notebook.marker_controls(text)
+        self.assertEqual(len(controls), 6)
+        self.assertEqual([{k: c[k] for k in ("name", "body", "marker")} for c in controls],
+                         notebook.scan_markers(text))
+
+
+class FormatWarningTests(unittest.TestCase):
+    """N4-03: format_warnings(), the fill-in view's never-blocking checks (OQ-09)."""
+
+    VECTOR = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    BAD_VECTORS = [
+        "CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H/A:H",       # reordered
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H",           # missing A
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/E:P",   # extra metric
+        "CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",       # invalid value
+        "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",       # wrong version
+        "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H (9.8)", # trailing text
+        "cvss:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",       # case
+    ]
+
+    def assert_rule(self, name, good, bad, warning):
+        for value in good:
+            with self.subTest(name=name, value=value):
+                self.assertEqual(notebook.format_warnings(name, value), [])
+        for value in bad:
+            with self.subTest(name=name, value=value):
+                self.assertEqual(notebook.format_warnings(name, value), [warning])
+
+    def test_cvss_rule_is_compiles_regex_object(self):
+        self.assertIs(notebook.FORMAT_RULES["CVSS_VECTOR"][0], compile.FULL_CVSS31_VECTOR_RE)
+
+    def test_finding_id(self):
+        self.assert_rule("FINDING_ID", ["F-000", "F-999"],
+                         ["F-00", "F-0000", "G-001", "f-001", "F-٠٠١", "F-001x",
+                          "F-001\n", " F-001", "IR-001"],
+                         "should look like F-001")
+
+    def test_ir_id(self):
+        self.assert_rule("IR_ID", ["IR-000", "IR-999"],
+                         ["IR-00", "IR-0000", "F-001", "ir-001", "IR-٠٠١", "IR-001x",
+                          "IR-001\n", " IR-001"],
+                         "should look like IR-001")
+
+    def test_cvss_vector(self):
+        self.assert_rule("CVSS_VECTOR", [self.VECTOR], self.BAD_VECTORS + [self.VECTOR + "\n"],
+                         notebook.FORMAT_RULES["CVSS_VECTOR"][1])
+
+    def test_cvss_vector_agrees_with_compile(self):
+        for value in [self.VECTOR, self.VECTOR + "\n"] + self.BAD_VECTORS:
+            with self.subTest(value=value):
+                passes = compile.FULL_CVSS31_VECTOR_RE.fullmatch(value) is not None
+                self.assertEqual(notebook.format_warnings("CVSS_VECTOR", value) == [], passes)
+
+    def test_cvss_score(self):
+        self.assert_rule("CVSS_SCORE", ["0.0", "9.9", "10.0"],
+                         ["10.1", "11.0", "-1.0", "7", "7.", ".5", "7.55", "07.5", "7.5 high",
+                          "7.5\n", "٧.٥"],
+                         "should be 0.0 to 10.0 with one decimal, e.g. 7.5")
+
+    def test_dates_for_every_date_name(self):
+        for name in ("DATE", "DATE_DETECTED", "DATE_REPORTED"):
+            self.assert_rule(name, ["2026-10-29"],
+                             ["2026-1-29", "2026-10-9", "26-10-29", "2026/10/29", "2026.10.29",
+                              "2026-10-29 morning", "2026-10-29\n", "٢026-10-29"],
+                             "should be a date as YYYY-MM-DD")
+
+    def test_times_for_every_time_name(self):
+        for name in ("TIME", "TIME_STARTED", "TIME_STOPPED"):
+            self.assert_rule(name, ["09:05", "23:59"],
+                             ["9:05", "09:5", "09.05", "0905", "09:05 PDT", "09:05\n", "09:05:00"],
+                             "should be a time as HH:MM")
+
+    def test_reference_url(self):
+        self.assert_rule("REFERENCE_URL", ["http://example.test", "https://example.test/a", "http"],
+                         ["example.test", "see http://example.test", "HTTP://example.test",
+                          "Https://example.test", " http://example.test"],
+                         "should start with http")
+
+    def test_leftover_marker_warns_with_or_without_a_format_problem(self):
+        self.assertEqual(notebook.format_warnings("REFERENCE_URL", "http://x/[[Y"),
+                         [notebook.LEFTOVER_WARNING])
+        self.assertEqual(notebook.format_warnings("FINDING_ID", "F-001 [[NOTE: x]]"),
+                         ["should look like F-001", notebook.LEFTOVER_WARNING])
+
+    def test_leftover_warning_follows_qas_own_check(self):
+        # Chunk N4 CR-1: only what compile.LEFTOVER_RE reports, so a pasted
+        # bash test gets no warning.
+        for value in ("if [[ -f /etc/shadow ]]; then cat it; fi", "[[ -f x ]]", "[[a", "[[", "[[1"):
+            with self.subTest(value=value):
+                self.assertIsNone(compile.LEFTOVER_RE.search(value))
+                self.assertEqual(notebook.format_warnings("REPRODUCTION_STEPS", value), [])
+        for value in ("[[A", "x [[HOST]] y", "[[_"):
+            with self.subTest(value=value):
+                self.assertEqual(notebook.format_warnings("REPRODUCTION_STEPS", value),
+                                 [notebook.LEFTOVER_WARNING])
+
+    def test_unknown_name_gets_only_the_leftover_warning(self):
+        self.assertEqual(notebook.format_warnings("HOST", "anything at all\n"), [])
+        self.assertEqual(notebook.format_warnings("HOST", "a [[B"), [notebook.LEFTOVER_WARNING])
+        # A name that only contains a checked one isn't checked.
+        self.assertEqual(notebook.format_warnings("PREVIOUS_FINDING_ID", "none"), [])
+
+    def test_empty_value_gets_no_warning(self):
+        for name in ("FINDING_ID", "CVSS_SCORE", "DATE_DETECTED", "HOST"):
+            with self.subTest(name=name):
+                self.assertEqual(notebook.format_warnings(name, ""), [])
+
+    def test_warnings_never_block_or_change_the_value(self):
+        samples = [("FINDING_ID", "F-1"), ("IR_ID", "x"), ("CVSS_VECTOR", self.BAD_VECTORS[0]),
+                   ("CVSS_SCORE", "11.0"), ("DATE", "today"), ("TIME", "noon"),
+                   ("REFERENCE_URL", "ftp://x"), ("HOST", "[[X")]
+        for name, value in samples:
+            with self.subTest(name=name):
+                typed = str(value)
+                warnings = notebook.format_warnings(name, typed)
+                self.assertIsInstance(warnings, list)
+                self.assertGreater(len(warnings), 0)
+                self.assertTrue(all(isinstance(w, str) for w in warnings))
+                self.assertEqual(typed, value)
+
+
+class ApplyMarkerValueTests(unittest.TestCase):
+    """N4-04: apply_marker_values(), the Save step's exact replacement."""
+
+    def fields(self, scanned, *values):
+        """scan_markers(scanned)'s fields, given these values in order."""
+        fields = notebook.scan_markers(scanned)
+        self.assertEqual(len(fields), len(values))
+        return [dict(field, value=value) for field, value in zip(fields, values)]
+
+    def test_plain_marker_replaced_rest_unchanged(self):
+        text = "# Title\r\n- **Host:** [[HOST]]  \r\n\ttail\n"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, "dc01")),
+                         ("# Title\r\n- **Host:** dc01  \r\n\ttail\n", []))
+
+    def test_value_inserted_byte_for_byte(self):
+        value = " a | `b` $HOME [[X \\n \\\\ café → \U0001F600\nsecond line\r\n  "
+        text = "before [[DETAIL]] after"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, value)),
+                         ("before " + value + " after", []))
+
+    def test_inserted_value_is_not_processed_again(self):
+        text = "[[HOST]] [[PORT]]"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, "[[PORT]]", "445")),
+                         ("[[PORT]] 445", []))
+
+    def test_repeated_name_fills_every_copy_only(self):
+        text = "[[HOST]] / [[HOSTNAME]] / [[HOST]]\n[[HOST]]"
+        fields = self.fields(text, "dc01", "")
+        self.assertEqual(notebook.apply_marker_values(text, fields),
+                         ("dc01 / [[HOSTNAME]] / dc01\ndc01", []))
+
+    def test_identical_body_markers_filled_by_position(self):
+        text = "1: [[TODO: same]]\n2: [[TODO: same]]\n"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, "first", "second")),
+                         ("1: first\n2: second\n", []))
+
+    def test_moved_marker_is_found_where_it_is_now(self):
+        scanned = "A [[TODO: who?]]\nB [[HOST]]\n"
+        current = "B [[HOST]]\nnew line\nA moved: [[TODO: who?]]\n"
+        self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "alice", "dc01")),
+                         ("B dc01\nnew line\nA moved: alice\n", []))
+
+    def test_missing_marker_warns_and_changes_nothing_else(self):
+        scanned = "[[HOST]] [[TODO: who?]] [[PORT]]"
+        current = "dc01 typed by hand [[TODO: who?]] [[PORT]]"
+        self.assertEqual(
+            notebook.apply_marker_values(current, self.fields(scanned, "dc02", "", "")),
+            (current, ["[[HOST]] is no longer in the text: value not saved"]))
+        current = "[[HOST]] [[TODO: whom?]] [[PORT]]"
+        self.assertEqual(
+            notebook.apply_marker_values(current, self.fields(scanned, "", "alice", "")),
+            (current, ["[[TODO: who?]] is no longer in the text: value not saved"]))
+
+    def test_one_of_two_identical_body_markers_removed(self):
+        # Which copy is left can't be known, so neither value is used and
+        # both warn: replacing the survivor could put the wrong value there.
+        scanned = "1: [[TODO: same]]\n2: [[TODO: same]]\n"
+        current = "2: [[TODO: same]]\n"
+        warning = "[[TODO: same]] is in the text 1 times, not 2, so it can't be told apart: value not saved"
+        self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "first", "second")),
+                         (current, [warning, warning]))
+        # Only one box filled: still not used, one warning.
+        self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "", "second")),
+                         (current, [warning]))
+
+    def test_identical_body_marker_copied_also_refused(self):
+        scanned = "[[TODO: same]]\n"
+        current = "[[TODO: same]]\n[[TODO: same]]\n"
+        self.assertEqual(notebook.apply_marker_values(current, self.fields(scanned, "x")),
+                         (current, ["[[TODO: same]] is in the text 2 times, not 1,"
+                                    " so it can't be told apart: value not saved"]))
+
+    def test_empty_value_leaves_marker(self):
+        text = "a [[HOST]] b [[TODO: who?]] c [[CHOOSE: x / y]]\n"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, "", "", "")), (text, []))
+        # Empty and gone: nothing to save, so no warning either.
+        self.assertEqual(notebook.apply_marker_values("gone\n", self.fields(text, "", "", "")),
+                         ("gone\n", []))
+
+    def test_whitespace_only_value_counts_as_filled(self):
+        text = "a [[HOST]] b [[TODO: who?]]"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, " ", "\t\n")),
+                         ("a   b \t\n", []))
+
+    def test_note_is_never_replaced(self):
+        text = "x [[NOTE: one\ntwo]] y [[NOTE: short]] z\n"
+        self.assertEqual(notebook.apply_marker_values(text, self.fields(text, "gone", "also gone")),
+                         (text, []))
+
+    def test_mixed_save(self):
+        scanned = ("# [[FINDING_ID]]: [[TITLE]]\n"
+                   "[[NOTE: help\nmore]]\n"
+                   "- **Severity:** [[CHOOSE: High / Low]]\n"
+                   "1. [[TODO: step]]\n2. [[TODO: step]]\n"
+                   "[[HOST]] then [[FINDING_ID]] [[GONE]]\n")
+        current = ("# [[FINDING_ID]]: [[TITLE]]\n"
+                   "[[NOTE: help\nmore]]\n"
+                   "- **Severity:** [[CHOOSE: High / Low]]\n"
+                   "1. [[TODO: step]]\n2. [[TODO: step]]\n"
+                   "[[HOST]] then [[FINDING_ID]] typed\n")
+        fields = self.fields(scanned, "F-001", "", "ignored", "High", "one", "two [[HOST]]",
+                             "dc01", "x")
+        self.assertEqual(notebook.apply_marker_values(current, fields), (
+            "# F-001: [[TITLE]]\n"
+            "[[NOTE: help\nmore]]\n"
+            "- **Severity:** High\n"
+            "1. one\n2. two [[HOST]]\n"
+            "dc01 then F-001 typed\n",
+            ["[[GONE]] is no longer in the text: value not saved"]))
+
+
+# A working copy with the person's own files and one file in every place
+# the fill-in view must never open or save (N4-05 case 4).
+EDITABLE_FILES = {
+    "findings/F-001-a.md": "# F-001\n- **Host:** [[HOST]]\n",
+    "findings/F-005-other.md": "other finding\n",
+    "field-notes/alice/NOTE-x.md": "note\n",
+    "field-notes/alice/checklist-state.json": "{}\n",
+    "field-notes/bob/NOTE-b.md": "bob's note\n",
+    "notes/study.md": "study\n",
+    "templates/finding.md": "[[FINDING_ID]]\n",
+    "checklists/10-recon.md": "- [ ] scan\n",
+    "incoming/bob/findings/F-009-x.md": "bob's finding\n",
+    "findings/sub/F-002-nested.md": "nested\n",
+    "findings/F-003-x.txt": "not markdown\n",
+    "elsewhere/F-001-a.md": "in-root copy\n",
+    "elsewhere/alice/NOTE-x.md": "in-root copy\n",
+}
+
+
+# save()'s default base: the file's text as it is on disk at the time.
+CURRENT = object()
+
+
+class EditableFileTests(ServerTestCase):
+    """N4-05: GET and POST /file, opening and saving the person's own files."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = support.make_worktree(self, EDITABLE_FILES)
+        self.server.settings["root"] = self.home.resolve()
+        self.outside = support.make_worktree(self, {"F-001-a.md": "outside\n",
+                                                    "alice/NOTE-x.md": "outside\n",
+                                                    "secret.md": "secret\n"})
+
+    def snapshot(self):
+        return tree(self.home), tree(self.outside), tree(self.logdir)
+
+    def get(self, path):
+        """GET /file?path=...; return (status, JSON or text)."""
+        response, body = self.send_full("GET", "/file?path=" + quote(path, safe=""), self.good_host())
+        self.assert_safe_headers(response)
+        if response.status == 200:
+            self.assertEqual(response.getheader("Content-Type"), "application/json")
+            return 200, json.loads(body)
+        self.assertEqual(response.getheader("Content-Type"), "text/plain; charset=utf-8")
+        return response.status, body
+
+    def post(self, body, token="default", host=None, length=None):
+        """POST raw body bytes to /file; return (status, JSON or text). Options as NewFileRouteTests.post()."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/file", skip_host=True)
+        connection.putheader("Host", host or self.good_host())
+        if token == "default":
+            connection.putheader("X-CPTC-Token", self.server.token)
+        elif token is not None:
+            connection.putheader("X-CPTC-Token", token)
+        connection.putheader("Content-Type", "application/json")
+        if length is not False:
+            connection.putheader("Content-Length", str(len(body)) if length is None else length)
+        connection.endheaders(body)
+        response = connection.getresponse()
+        text = response.read().decode("utf-8")
+        self.assert_safe_headers(response)
+        if response.status == 200:
+            self.assertEqual(response.getheader("Content-Type"), "application/json")
+            return 200, json.loads(text)
+        self.assertEqual(response.getheader("Content-Type"), "text/plain; charset=utf-8")
+        return response.status, text
+
+    def disk_text(self, path):
+        """The file's text as GET /file reads it, or "" if it isn't a readable file."""
+        try:
+            # is_file() first: opening a FIFO would wait forever.
+            if (self.home / path).is_file():
+                return compile.read_markdown(self.home / path)
+        except (OSError, ValueError, compile.InputError):
+            pass
+        return ""
+
+    def save(self, path, text, fields=(), base=CURRENT, **options):
+        """POST a save; base defaults to the file's text now, so only D4 tests go stale."""
+        if base is CURRENT:
+            base = self.disk_text(path)
+        body = json.dumps({"path": path, "text": text, "base": base,
+                           "fields": list(fields)}).encode("utf-8")
+        return self.post(body, **options)
+
+    def assert_refused(self, status_wanted, text_start, call, *args, **options):
+        """call(*args) is refused with this status and text, and nothing on disk changes."""
+        before = self.snapshot()
+        status, text = call(*args, **options)
+        self.assertEqual(status, status_wanted, text)
+        self.assertTrue(text.startswith(text_start), text)
+        self.assertEqual(self.snapshot(), before)
+
+    def assert_both_refused(self, path, text_start="refused: "):
+        self.assert_refused(403, text_start, self.get, path)
+        self.assert_refused(403, text_start, self.save, path, "changed\n")
+
+    def link(self, path, target):
+        full = self.home / path
+        if full.is_dir() and not full.is_symlink():
+            shutil.rmtree(str(full))
+        elif full.exists():
+            full.unlink()
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.symlink_to(target)
+
+    # Case 1
+    def test_read_own_files(self):
+        for path in ("findings/F-001-a.md", "field-notes/alice/NOTE-x.md"):
+            with self.subTest(path=path):
+                before = self.snapshot()
+                text = EDITABLE_FILES[path]
+                self.assertEqual(self.get(path), (200, {
+                    "path": path, "text": text, "fields": notebook.marker_controls(text)}))
+                self.assertEqual(self.snapshot(), before)
+
+    def test_only_listed_files_open(self):
+        files, _ = notebook.list_own_files(self.home.resolve(), "alice")
+        self.assertEqual(files, ["findings/F-001-a.md", "findings/F-005-other.md",
+                                 "field-notes/alice/NOTE-x.md"])
+        for path in files:
+            with self.subTest(path=path):
+                self.assertEqual(self.get(path)[0], 200)
+
+    # Case 2
+    def test_save_round_trips_exact_bytes(self):
+        text = "café → \U0001F600\r\nline\n\ttab  \r\n  trailing \nno final newline"
+        for path in ("findings/F-001-a.md", "field-notes/alice/NOTE-x.md"):
+            with self.subTest(path=path):
+                status, answer = self.save(path, text)
+                self.assertEqual((status, answer), (200, {
+                    "path": path, "text": text, "fields": [], "warnings": []}))
+                self.assertEqual((self.home / path).read_bytes(), text.encode("utf-8"))
+                self.assertEqual(self.get(path)[1]["text"], text)
+        # The temp file was renamed into place, so none is left over.
+        self.assertEqual(sorted(p.name for p in (self.home / "findings").glob(".save-*")), [])
+
+    def test_save_keeps_the_files_mode(self):
+        path = self.home / "findings/F-001-a.md"
+        os.chmod(str(path), 0o640)
+        self.assertEqual(self.save("findings/F-001-a.md", "x\n")[0], 200)
+        self.assertEqual(os.stat(str(path)).st_mode & 0o777, 0o640)
+
+    # Case 3
+    def test_bom_is_dropped(self):
+        path = self.home / "findings/F-001-a.md"
+        path.write_bytes(b"\xef\xbb\xbf# F-001\r\n[[HOST]]\r\n")
+        status, answer = self.get("findings/F-001-a.md")
+        self.assertEqual(answer["text"], "# F-001\r\n[[HOST]]\r\n")
+        # The BOM alone is no change on disk (Chunk N4 D4 case 9).
+        self.assertEqual(self.save("findings/F-001-a.md", answer["text"],
+                                   base=answer["text"])[0], 200)
+        self.assertEqual(path.read_bytes(), b"# F-001\r\n[[HOST]]\r\n")
+
+    # Case 4
+    def test_other_places_refused(self):
+        for path in ("notes/study.md", "templates/finding.md", "checklists/10-recon.md",
+                     "incoming/bob/findings/F-009-x.md", "field-notes/bob/NOTE-b.md",
+                     "findings/sub/F-002-nested.md", "findings/F-003-x.txt",
+                     "field-notes/alice/checklist-state.json", "elsewhere/F-001-a.md",
+                     str(self.logdir / "alice.log"), "findings", "field-notes/alice"):
+            with self.subTest(path=path):
+                self.assert_both_refused(path, "refused: not one of your own files: ")
+
+    def test_log_folder_inside_own_folder_not_saved(self):
+        self.server.settings["logdir"] = (self.home / "field-notes/alice").resolve()
+        self.assertEqual(self.get("field-notes/alice/NOTE-x.md")[0], 200)
+        self.assert_refused(403, "refused: the log folder is read-only", self.save,
+                            "field-notes/alice/NOTE-x.md", "changed\n")
+
+    # Case 5
+    def test_missing_file_refused_and_not_created(self):
+        self.assert_both_refused("findings/F-404-missing.md", "refused: not one of your own files: ")
+        self.assertFalse((self.home / "findings/F-404-missing.md").exists())
+
+    # Case 6
+    def test_traversal_and_malformed_paths_refused(self):
+        for path in (str(self.home / "findings/F-001-a.md"), "/findings/F-001-a.md",
+                     "findings/../findings/F-001-a.md", "findings//F-001-a.md",
+                     "./findings/F-001-a.md", "../" + self.outside.name + "/secret.md",
+                     "findings\x00/F-001-a.md", "field-notes/al\x00ice/NOTE-x.md",
+                     "findings/F-001-a.md\x00", "\x00", ""):
+            with self.subTest(path=path):
+                self.assert_refused(403, "refused: not one of your own files: ", self.save,
+                                    path, "changed\n")
+                if path:
+                    self.assert_refused(403, "refused: not one of your own files: ", self.get, path)
+
+    def test_get_needs_exactly_one_path(self):
+        for query in ("/file", "/file?path=", "/file?path=findings/F-001-a.md&path=findings/F-005-other.md"):
+            with self.subTest(query=query):
+                before = self.snapshot()
+                response, body = self.send_full("GET", query, self.good_host())
+                self.assert_safe_headers(response)
+                self.assertEqual(response.status, 400)
+                self.assertTrue(body.startswith("give one file: "), body)
+                self.assertEqual(self.snapshot(), before)
+
+    # Case 7
+    def test_links_pointing_outside_refused_at_every_level(self):
+        for level, target, path in (
+                ("findings", self.outside, "findings/F-001-a.md"),
+                ("field-notes", self.outside, "field-notes/alice/NOTE-x.md"),
+                ("field-notes/alice", self.outside / "alice", "field-notes/alice/NOTE-x.md"),
+                ("findings/F-001-a.md", self.outside / "secret.md", "findings/F-001-a.md")):
+            with self.subTest(level=level):
+                self.home = support.make_worktree(self, EDITABLE_FILES)
+                self.server.settings["root"] = self.home.resolve()
+                self.link(level, target)
+                self.assert_both_refused(path, "refused: not one of your own files: ")
+
+    # Cases 8 and 9
+    def test_in_root_links_open_but_never_save(self):
+        for level, target, path in (
+                ("findings", "elsewhere", "findings/F-001-a.md"),
+                ("field-notes", "elsewhere", "field-notes/alice/NOTE-x.md"),
+                ("field-notes/alice", "bob", "field-notes/alice/NOTE-b.md"),
+                ("findings/F-001-a.md", "F-005-other.md", "findings/F-001-a.md")):
+            with self.subTest(level=level):
+                self.home = support.make_worktree(self, EDITABLE_FILES)
+                self.server.settings["root"] = self.home.resolve()
+                self.link(level, target)
+                # Reading follows the in-root link, as the list does (OQ-17).
+                self.assertEqual(self.get(path)[0], 200)
+                self.assert_refused(403, "refused: a link, not saving through it: " + level,
+                                    self.save, path, "changed\n")
+
+    # Case 10
+    def test_hard_link_opens_but_never_saves(self):
+        os.link(str(self.home / "findings/F-001-a.md"), str(self.home / "findings/F-006-twin.md"))
+        for path in ("findings/F-001-a.md", "findings/F-006-twin.md"):
+            with self.subTest(path=path):
+                self.assertEqual(self.get(path)[0], 200)
+                self.assert_refused(403, "refused: the file has another hard link", self.save,
+                                    path, "changed\n")
+
+    # Case 11
+    def test_folder_named_md_refused(self):
+        (self.home / "findings/F-007-dir.md").mkdir()
+        self.assert_both_refused("findings/F-007-dir.md", "refused: not one of your own files: ")
+
+    def test_fifo_named_md_refused(self):
+        fifo = self.home / "findings/F-008-pipe.md"
+        os.mkfifo(str(fifo))
+        before = os.lstat(str(fifo))
+        # tree() would open the FIFO and wait, so only its own state is compared.
+        for call in (self.get, lambda path: self.save(path, "changed\n")):
+            status, text = call("findings/F-008-pipe.md")
+            self.assertEqual(status, 403, text)
+            self.assertTrue(text.startswith("refused: not one of your own files: "), text)
+        after = os.lstat(str(fifo))
+        self.assertTrue(stat.S_ISFIFO(after.st_mode))
+        self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    # Case 12
+    def test_text_that_cant_be_utf8_refused(self):
+        self.assert_refused(400, "send one save as JSON", self.post,
+                            b'{"path": "findings/F-001-a.md", "text": "\xff", "fields": [],'
+                            b' "base": "# F-001\\n- **Host:** [[HOST]]\\n"}')
+        self.assert_refused(400, "not saved: ", self.post,
+                            b'{"path": "findings/F-001-a.md", "text": "a\\ud800b", "fields": [],'
+                            b' "base": "# F-001\\n- **Host:** [[HOST]]\\n"}')
+
+    # Case 13
+    def test_bad_bodies_refused_before_any_write(self):
+        good = {"path": "findings/F-001-a.md", "text": "x\n", "fields": [],
+                "base": EDITABLE_FILES["findings/F-001-a.md"]}
+        field = {"name": "HOST", "marker": "[[HOST]]", "body": None, "value": "dc01"}
+
+        def body(**changes):
+            fields = dict(good)
+            fields.update(changes)
+            return json.dumps(fields).encode("utf-8")
+        cases = [
+            (b"", False), (body(), "abc"), (body(), "-1"), (body(), "1e3"),
+            (b"x" * 10, str(notebook.MAX_SAVE_BYTES + 1)),
+            (b"{not json", None), (b"[]", None), (b'"text"', None),
+            (json.dumps({"path": "findings/F-001-a.md", "text": "x"}).encode(), None),
+            # Chunk N4 D4 cases 3 and 4: base missing, or not text.
+            (json.dumps({k: v for k, v in good.items() if k != "base"}).encode(), None),
+            (body(base=None), None), (body(base={}), None), (body(base=[]), None),
+            (body(base=1), None), (body(base=True), None),
+            (body(extra=1), None), (body(path=1), None), (body(text=None), None),
+            (body(fields={}), None), (body(fields=[1]), None),
+            (body(fields=[{k: v for k, v in field.items() if k != "value"}]), None),
+            (body(fields=[dict(field, value=None)]), None), (body(fields=[dict(field, body=1)]), None),
+            (body(fields=[dict(field, name=1)]), None), (body(fields=[dict(field, marker=None)]), None),
+        ]
+        with mock.patch.object(notebook, "save_editable_file", side_effect=AssertionError("called")):
+            for raw, length in cases:
+                with self.subTest(raw=raw[:30], length=length):
+                    before = self.snapshot()
+                    status, text = self.post(raw, length=length)
+                    self.assertEqual(status, 400, text)
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_a_short_body_doesnt_hang_the_server(self):
+        with mock.patch.object(notebook.NotebookHandler, "timeout", 0.5), \
+                mock.patch.object(notebook, "save_editable_file", side_effect=AssertionError("called")):
+            self.assert_refused(400, "send one save as JSON", self.post, b"{}", length="50")
+        self.assertEqual(self.get("findings/F-001-a.md")[0], 200)
+
+    # Case 14
+    def test_only_a_fully_allowed_request_saves(self):
+        for options in ({"token": None}, {"token": "wrong"}, {"token": notebook.make_token()},
+                        {"host": "evil.example:" + str(self.port)}, {"host": "localhost:" + str(self.port)}):
+            with self.subTest(options=options):
+                self.assert_refused(403, "refused: use http://127.0.0.1:", self.save,
+                                    "findings/F-001-a.md", "changed\n", **options)
+        self.assertEqual(self.save("findings/F-001-a.md", "changed\n")[0], 200)
+        self.assertEqual((self.home / "findings/F-001-a.md").read_bytes(), b"changed\n")
+
+    # Cases 15 and 16 are in every helper: each answer's type and nosniff
+    # header, and an unchanged disk after every refusal.
+
+    def test_save_applies_boxes_and_rescans(self):
+        status, opened = self.get("findings/F-001-a.md")
+        text = opened["text"] + "- **Score:** [[CVSS_SCORE]]\n[[GONE]]\n"
+        fields = notebook.marker_controls(text)
+        values = {"HOST": "dc01 [[X", "CVSS_SCORE": "11.0", "GONE": "y"}
+        # The fields go back as GET gave them, with "control" and all.
+        sent = [dict(field, value=values[field["name"]]) for field in fields]
+        typed = text.replace("[[GONE]]\n", "")
+        status, answer = self.save("findings/F-001-a.md", typed, sent)
+        saved = "# F-001\n- **Host:** dc01 [[X\n- **Score:** 11.0\n"
+        self.assertEqual((status, answer), (200, {
+            "path": "findings/F-001-a.md", "text": saved, "fields": notebook.marker_controls(saved),
+            "warnings": ["[[GONE]] is no longer in the text: value not saved",
+                         "HOST: " + notebook.LEFTOVER_WARNING,
+                         "CVSS_SCORE: should be 0.0 to 10.0 with one decimal, e.g. 7.5"]}))
+
+
+class StaleSaveTests(EditableFileTests):
+    """Chunk N4 D4 (DECISIONS 2026-10-29): a save sends back the text it
+    started from as "base", and is refused if the file changed since."""
+
+    PATH = "findings/F-001-a.md"
+    OPENED = EDITABLE_FILES[PATH]
+
+    # Run only these tests here, not EditableFileTests' again.
+    def run(self, result=None):
+        if not self._testMethodName.startswith("test_stale_"):
+            return result
+        return super().run(result)
+
+    def file_state(self):
+        """Bytes, mode, inode and change times of the file, plus the folder's names."""
+        info = os.lstat(str(self.home / self.PATH))
+        return ((self.home / self.PATH).read_bytes(), info.st_mode, info.st_ino,
+                info.st_mtime_ns, sorted(os.listdir(str(self.home / "findings"))))
+
+    def assert_stale(self, base=OPENED, text="mine\n"):
+        """The save is refused with the 409, writes nothing and makes no temp file."""
+        before = self.file_state(), self.snapshot()
+        with mock.patch.object(notebook.tempfile, "mkstemp",
+                               side_effect=AssertionError("temp file made")):
+            status, answer = self.save(self.PATH, text, base=base)
+        self.assertEqual((status, answer), (409, notebook.STALE_MESSAGE))
+        self.assertEqual((self.file_state(), self.snapshot()), before)
+
+    def test_stale_get_text_is_the_base(self):
+        # Cases 1 and 2: GET's text, sent back unchanged, lets the save through.
+        status, opened = self.get(self.PATH)
+        self.assertEqual(opened["text"], self.OPENED)
+        fields = [dict(field, value="dc01") for field in opened["fields"]]
+        status, answer = self.save(self.PATH, opened["text"], fields, base=opened["text"])
+        self.assertEqual(status, 200, answer)
+        self.assertEqual((self.home / self.PATH).read_bytes(), b"# F-001\n- **Host:** dc01\n")
+
+    def test_stale_any_change_on_disk_is_refused(self):
+        # Cases 6, 7 and 8: a whole new text, one character, a trailing
+        # space, or the same text with Windows line endings.
+        for newer in ("someone else's edit\n", self.OPENED.replace("F-001", "F-002"),
+                      self.OPENED + " ", self.OPENED.replace("\n", "\r\n")):
+            with self.subTest(newer=newer):
+                (self.home / self.PATH).write_bytes(newer.encode("utf-8"))
+                self.assert_stale()
+                self.assertEqual((self.home / self.PATH).read_bytes(), newer.encode("utf-8"))
+
+    def test_stale_base_differing_in_whitespace_is_refused(self):
+        # Case 8 the other way round: the disk is unchanged, the base isn't.
+        for base in (self.OPENED.replace("\n", "\r\n"), self.OPENED.rstrip("\n"), " " + self.OPENED):
+            with self.subTest(base=base):
+                self.assert_stale(base=base)
+
+    def test_stale_bom_added_on_disk_is_no_change(self):
+        # Case 9: an editor adding a BOM leaves the text as GET reads it.
+        (self.home / self.PATH).write_bytes(b"\xef\xbb\xbf" + self.OPENED.encode("utf-8"))
+        self.assertEqual(self.save(self.PATH, "mine\n", base=self.OPENED)[0], 200)
+        self.assertEqual((self.home / self.PATH).read_bytes(), b"mine\n")
+
+    def test_stale_replaced_by_a_new_file(self):
+        # Cases 11 and 12: a new file at the name (as an editor's save does)
+        # is stale if its text differs, and saves if it is the same.
+        full = self.home / self.PATH
+        replacement = self.home / "findings/.replacement"
+        replacement.write_text("their version\n", encoding="utf-8")
+        os.replace(str(replacement), str(full))
+        self.assert_stale()
+        self.assertEqual(full.read_bytes(), b"their version\n")
+        replacement.write_text(self.OPENED, encoding="utf-8")
+        os.replace(str(replacement), str(full))
+        self.assertEqual(self.save(self.PATH, "mine\n", base=self.OPENED)[0], 200)
+        self.assertEqual(full.read_bytes(), b"mine\n")
+
+    def test_stale_links_swapped_in_are_still_refused_by_d2(self):
+        # Case 13: a link swapped in after GET, even to a file holding the
+        # same text, is refused by the link checks, and neither file changes.
+        for kind in ("symlink", "hard link"):
+            with self.subTest(kind=kind):
+                self.home = support.make_worktree(self, EDITABLE_FILES)
+                self.server.settings["root"] = self.home.resolve()
+                twin = self.home / "elsewhere/F-001-a.md"
+                twin.write_text(self.OPENED, encoding="utf-8")
+                (self.home / self.PATH).unlink()
+                if kind == "symlink":
+                    (self.home / self.PATH).symlink_to(twin)
+                else:
+                    os.link(str(twin), str(self.home / self.PATH))
+                self.assert_refused(403, "refused: ", self.save, self.PATH, "mine\n",
+                                    base=self.OPENED)
+                self.assertEqual(twin.read_bytes(), self.OPENED.encode("utf-8"))
+
+    def test_stale_file_now_too_big_or_not_text(self):
+        # Case 14: a file grown past what a save can carry is stale; one that
+        # is no longer UTF-8 can't be compared, so it isn't saved either.
+        full = self.home / self.PATH
+        full.write_bytes(b"x" * (notebook.MAX_SAVE_BYTES + 1))
+        self.assert_stale()
+        full.write_bytes(b"\xff not text\n")
+        before = full.read_bytes(), self.snapshot()
+        status, answer = self.save(self.PATH, "mine\n", base=self.OPENED)
+        self.assertEqual(status, 500, answer)
+        self.assertTrue(answer.startswith("not saved: "), answer)
+        self.assertEqual((full.read_bytes(), self.snapshot()), before)
+
+    def test_stale_saved_text_is_the_next_base(self):
+        # Cases 15, 16 and 17: the answer's text, boxes applied and format
+        # warnings and all, is the next base; the first base is now stale.
+        text = self.OPENED + "- **Score:** [[CVSS_SCORE]]\n"
+        fields = [dict(field, value={"HOST": "dc01", "CVSS_SCORE": "11.0"}[field["name"]])
+                  for field in notebook.marker_controls(text)]
+        status, first = self.save(self.PATH, text, fields, base=self.OPENED)
+        self.assertEqual(status, 200, first)
+        self.assertEqual(first["text"], "# F-001\n- **Host:** dc01\n- **Score:** 11.0\n")
+        self.assertNotEqual(first["warnings"], [])
+        for base in (self.OPENED, text):
+            with self.subTest(base=base):
+                self.assert_stale(base=base)
+        self.assertEqual((self.home / self.PATH).read_text(encoding="utf-8"), first["text"])
+        status, second = self.save(self.PATH, "second\n", base=first["text"])
+        self.assertEqual(status, 200, second)
+        self.assertEqual((self.home / self.PATH).read_bytes(), b"second\n")
+
+    def test_stale_bom_typed_at_the_start_is_not_written(self):
+        # Chunk N4 CR-1 (re-review): text starting with U+FEFF (e.g. pasted)
+        # is saved without it (DECISIONS N4-05 BOM), so the answer is what
+        # GET would read and the next save with it as base goes through.
+        for typed in ("\ufeff# x\nnew\n", "\ufeff\ufeff# x\nnew\n"):
+            with self.subTest(boms=typed.count("\ufeff")):
+                status, first = self.save(self.PATH, typed)
+                self.assertEqual(status, 200, first)
+                self.assertEqual(first["text"], "# x\nnew\n")
+                self.assertEqual((self.home / self.PATH).read_bytes(), b"# x\nnew\n")
+                status, second = self.save(self.PATH, first["text"] + "more\n", base=first["text"])
+                self.assertEqual(status, 200, second)
+                self.assertEqual((self.home / self.PATH).read_bytes(), b"# x\nnew\nmore\n")
+
+    def test_stale_base_too_big_is_refused(self):
+        # Case 5: a base past the save size makes the request too big. The
+        # server refuses on Content-Length without reading the body, so only
+        # its start is sent (as test_bad_bodies_refused_before_any_write does).
+        body = json.dumps({"path": self.PATH, "text": "mine\n", "fields": [],
+                           "base": "x" * notebook.MAX_SAVE_BYTES}).encode("utf-8")
+        self.assertGreater(len(body), notebook.MAX_SAVE_BYTES)
+        before = self.file_state(), self.snapshot()
+        status, answer = self.post(body[:10], length=str(len(body)))
+        self.assertEqual(status, 400, answer)
+        self.assertTrue(answer.startswith("send one save as JSON"), answer)
+        self.assertEqual((self.file_state(), self.snapshot()), before)
 
 
 class AppShellTests(ServerTestCase):

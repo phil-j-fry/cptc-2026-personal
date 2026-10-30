@@ -6,8 +6,8 @@ files the repo already uses, in the working copy.
 Usage: python3 tools/notebook.py --name alice [--root ~/cptc-work] [--port 8765]
 
 Python 3 standard library only. It never runs commands, and it has no option
-to serve on any address but 127.0.0.1. It uses compile.py's root check;
-compile.py imports nothing from here.
+to serve on any address but 127.0.0.1. It uses compile.py's root check and
+marker regex; compile.py imports nothing from here.
 """
 
 import argparse
@@ -23,6 +23,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import compile
+# The same objects compile.py uses, so the fill-in view and the QA checks
+# always agree on what a marker is (OQ-13).
+from compile import MARKER_RE, strip_markers
 
 # Any run of characters that aren't allowed in a slug.
 NOT_SLUG_RE = re.compile(r"[^a-z0-9-]+")
@@ -1131,6 +1134,447 @@ def save_new_file(handler):
     send_json(handler, 200, {"path": path, "warnings": warnings, "refused": refused})
 
 
+def marker_parts(marker):
+    """Split a marker's text into (name, body); body is None for a plain [[NAME]]."""
+    # A name is capitals and "_" only, so the first colon ends it.
+    name, colon, body = marker[2:-2].partition(":")
+    return name, (body if colon else None)
+
+
+def listed_matches(text):
+    """Return the MARKER_RE matches the fill-in view lists, in the order they appear.
+
+    A plain marker whose name was already seen is left out: one box fills
+    every occurrence ("same name, same value", templates/README.md). A marker
+    with a body is always listed: each one is handled by its own position.
+    scan_markers() and marker_controls() both use this list, so they always
+    agree on which markers there are.
+    """
+    matches = []
+    seen_names = set()
+    # MARKER_RE makes a NOTE spanning several lines one marker, and skips
+    # bash tests like [[ -f x ]].
+    for match in MARKER_RE.finditer(text):
+        name, body = marker_parts(match.group(0))
+        if body is None:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+        matches.append(match)
+    return matches
+
+
+def scan_markers(text):
+    """Return a field for every marker listed_matches() keeps, in the order they appear.
+
+    Each field is {"name", "body", "marker"}. "marker" is the exact marker
+    text, e.g. "[[TODO: who ran it?]]". "name" is the part before any colon
+    (HOST, CHOOSE, TODO, NOTE). "body" is everything after the colon exactly
+    as written, or None for a plain [[NAME]] marker.
+    """
+    fields = []
+    for match in listed_matches(text):
+        name, body = marker_parts(match.group(0))
+        fields.append({"name": name, "body": body, "marker": match.group(0)})
+    return fields
+
+
+def is_note(marker):
+    """True for a [[NOTE: ...]] marker. A bare [[NOTE]] has no body, so it is a plain name."""
+    return marker.startswith("[[NOTE:")
+
+
+def blank_notes(text):
+    """Return text with every NOTE marker turned into spaces, its line breaks kept.
+
+    Every other character stays at the same position, so a marker's line can
+    be read from this text by the marker's own offsets, with notes ignored
+    (Box size: "Ignore NOTE markers when deciding").
+    """
+    pieces = []
+    last = 0
+    for match in MARKER_RE.finditer(text):
+        if is_note(match.group(0)):
+            pieces.append(text[last:match.start()])
+            # Kept line breaks mean a marker after a multi-line note is still
+            # on its own line.
+            pieces.append(re.sub(r"[^\n]", " ", match.group(0)))
+            last = match.end()
+    pieces.append(text[last:])
+    return "".join(pieces)
+
+
+def needs_textarea(blanked, start, end):
+    """True if the marker at blanked[start:end] gets a multi-line box (Box size).
+
+    blanked is blank_notes()'s text. Multi-line when the marker is the only
+    thing on its line, or when its line directly follows a heading line.
+    A marker inside a heading line is always one line: a heading is one line.
+    """
+    line_start = blanked.rfind("\n", 0, start) + 1
+    line_end = blanked.find("\n", end)
+    if line_end == -1:
+        line_end = len(blanked)
+    if HEADING_LINE_RE.match(blanked[line_start:line_end]):
+        return False
+    rest = blanked[line_start:start] + blanked[end:line_end]
+    # strip() also drops a "\r", so Windows line endings size the same.
+    if not rest.strip():
+        return True
+    if line_start == 0:
+        return False
+    previous_start = blanked.rfind("\n", 0, line_start - 1) + 1
+    return bool(HEADING_LINE_RE.match(blanked[previous_start:line_start - 1]))
+
+
+def marker_controls(text):
+    """Return scan_markers()'s fields, each with the control the fill-in view shows.
+
+    Each field gains "control":
+    - "note": a NOTE, shown as highlighted help, never editable. The app
+      never removes a note; the writer deletes it in the textarea.
+    - "dropdown": a CHOOSE, with "options", its body split on " / ".
+    - "input" (one line) or "textarea" (multi-line), by needs_textarea(),
+      for everything else. A TODO also gets "guidance", its body.
+    A repeated plain name is sized by its first place, where its box shows.
+    Bodies lose the space after the colon here, for display only.
+    """
+    blanked = blank_notes(text)
+    controls = []
+    for match in listed_matches(text):
+        name, body = marker_parts(match.group(0))
+        control = {"name": name, "body": body, "marker": match.group(0)}
+        if is_note(match.group(0)):
+            control["control"] = "note"
+        elif body is not None and name == "CHOOSE":
+            control["control"] = "dropdown"
+            control["options"] = body.strip().split(" / ")
+        else:
+            big = needs_textarea(blanked, match.start(), match.end())
+            control["control"] = "textarea" if big else "input"
+            if body is not None and name == "TODO":
+                control["guidance"] = body.strip()
+        controls.append(control)
+    return controls
+
+
+# The fill-in view's format checks by marker name (Fill-in Warnings):
+# (regex, warning). Each is used with fullmatch(), so trailing text or a
+# trailing newline warns. Digits are [0-9], since \d also matches other
+# scripts' digits (DECISIONS 2026-10-29 Chunk N4 D1, as Chunk N1 D1 for IDs).
+FORMAT_RULES = {
+    "FINDING_ID": (re.compile(r"F-[0-9]{3}"), "should look like F-001"),
+    "IR_ID": (re.compile(r"IR-[0-9]{3}"), "should look like IR-001"),
+    # compile.py's own regex, so a vector the notebook accepts also passes
+    # the QA check (Chunk 3 CR-4).
+    "CVSS_VECTOR": (compile.FULL_CVSS31_VECTOR_RE,
+                    "should be a full CVSS 3.1 vector, all eight metrics in order,"
+                    " e.g. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"),
+    "CVSS_SCORE": (re.compile(r"10\.0|[0-9]\.[0-9]"), "should be 0.0 to 10.0 with one decimal, e.g. 7.5"),
+    "REFERENCE_URL": (re.compile(r"http.*", re.DOTALL), "should start with http"),
+}
+# For every name starting DATE or TIME, e.g. DATE_DETECTED, TIME_STARTED.
+DATE_RULE = (re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}"), "should be a date as YYYY-MM-DD")
+TIME_RULE = (re.compile(r"[0-9]{2}:[0-9]{2}"), "should be a time as HH:MM")
+LEFTOVER_WARNING = "contains [[ and a capital letter, which QA will report as a leftover marker"
+
+
+def format_rule(name):
+    """Return the (regex, warning) that checks a marker name's value, or None for no check."""
+    if name in FORMAT_RULES:
+        return FORMAT_RULES[name]
+    if name.startswith("DATE"):
+        return DATE_RULE
+    if name.startswith("TIME"):
+        return TIME_RULE
+    return None
+
+
+def format_warnings(name, value):
+    """Return the warnings for a value typed into marker name's box; [] if none.
+
+    Only warnings: the caller still saves the value exactly as typed. An
+    empty value gets none, since an empty box leaves its marker in place.
+    """
+    if value == "":
+        return []
+    warnings = []
+    rule = format_rule(name)
+    if rule is not None and not rule[0].fullmatch(value):
+        warnings.append(rule[1])
+    # compile.py's own leftover check (DECISIONS 2026-10-29 Chunk N4 D3), so
+    # this warns exactly when QA would report it: a bash [[ -f x ]] gets none.
+    if compile.LEFTOVER_RE.search(value):
+        warnings.append(LEFTOVER_WARNING)
+    return warnings
+
+
+def marker_targets(text, fields):
+    """Return ({start offset: value}, warnings): where each filled box's value goes in text.
+
+    fields is the whole field list from the scan the boxes were made from,
+    in its order, each with its "value". text is the current text, which the
+    writer may have edited in the textarea since that scan.
+    - An empty value changes nothing, so it is never checked.
+    - A NOTE is never replaced (Fill-in: the app never removes a note).
+    - A plain [[NAME]] is keyed by name: its value goes at every copy.
+    - A marker with a body is keyed by position: the k-th of the n identical
+      copies in the scan goes at the k-th copy in text. If text no longer
+      holds exactly n copies, the copies can't be matched up safely, so none
+      of them is replaced and each filled one warns.
+    """
+    now = {}
+    for match in MARKER_RE.finditer(text):
+        now.setdefault(match.group(0), []).append(match.start())
+    scanned = {}
+    for field in fields:
+        scanned[field["marker"]] = scanned.get(field["marker"], 0) + 1
+    targets = {}
+    warnings = []
+    seen = {}
+    for field in fields:
+        marker, value = field["marker"], field["value"]
+        occurrence = seen.get(marker, 0)
+        seen[marker] = occurrence + 1
+        if value == "" or is_note(marker):
+            continue
+        starts = now.get(marker, [])
+        if not starts:
+            warnings.append(marker + " is no longer in the text: value not saved")
+        elif field["body"] is None:
+            for start in starts:
+                targets[start] = value
+        elif len(starts) != scanned[marker]:
+            warnings.append(marker + " is in the text " + str(len(starts)) + " times, not "
+                            + str(scanned[marker]) + ", so it can't be told apart: value not saved")
+        else:
+            targets[starts[occurrence]] = value
+    return targets, warnings
+
+
+def apply_marker_values(text, fields):
+    """Return (new text, warnings) with each filled box's value in place of its marker.
+
+    marker_targets() decides where each value goes. Each value goes in
+    exactly as typed: no escaping, trimming or reformatting, and a value of
+    only spaces still counts as filled. Everything else in text is kept as
+    it is. One pass over text, so an inserted value is never scanned again:
+    a value "[[PORT]]" stays as typed even when PORT also has a value.
+    """
+    targets, warnings = marker_targets(text, fields)
+    pieces = []
+    last = 0
+    for match in MARKER_RE.finditer(text):
+        if match.start() in targets:
+            pieces.append(text[last:match.start()])
+            pieces.append(targets[match.start()])
+            last = match.end()
+    pieces.append(text[last:])
+    return "".join(pieces), warnings
+
+
+def editable_path(root, name, path):
+    """Return path if it is one of the person's own files; else raise RootError.
+
+    Only what list_own_files() lists can be opened or saved: the .md files
+    directly in findings/ and field-notes/<name>/. That leaves out notes/,
+    templates/, checklists/, incoming/, the logs, other people's folders,
+    subfolders, other file types, folders, missing files and links pointing
+    outside. path is only compared, never used to look at the disk.
+    """
+    files, _ = list_own_files(root, name)
+    if path not in files:
+        raise compile.RootError("not one of your own files: " + repr(path))
+    return path
+
+
+def read_editable_file(root, name, path):
+    """Return one of the person's own files' text, as compile.py reads it.
+
+    DECISIONS 2026-10-29 N4-05 BOM (user, A): compile.read_markdown() drops
+    a leading BOM, so the textarea never shows it and a save leaves it out.
+    Raises compile.RootError if path is refused and compile.InputError if
+    the file isn't UTF-8 text.
+    """
+    editable_path(root, name, path)
+    return compile.read_markdown(readable_path(root, path))
+
+
+def refuse_linked_save(root, path):
+    """Raise RootError if any part of path is a link, or the file has another hard link.
+
+    DECISIONS 2026-10-29 Chunk N4 D2: stricter than OQ-17's "a link inside
+    the root is fine" for saves, as Chunk N2 CR-1 is for the tick-state file:
+    writing through a link would change the file it points to, e.g. a
+    template or a teammate's finding. Reading through an in-root link is
+    still allowed, so the list and the open file match.
+    """
+    parts = path.split("/")
+    for count in range(1, len(parts) + 1):
+        shown = "/".join(parts[:count])
+        if os.path.islink(os.path.join(str(root), shown)):
+            raise compile.RootError("a link, not saving through it: " + shown)
+    # A save renames a new file into place, so the other hard-linked name
+    # would quietly keep the old text: the two copies would split apart.
+    if os.stat(os.path.join(str(root), path)).st_nlink > 1:
+        raise compile.RootError("the file has another hard link, not saving through it: " + path)
+
+
+class StaleError(Exception):
+    """The file on disk isn't the text the save started from."""
+
+
+STALE_MESSAGE = "changed on disk since you opened it, reload"
+
+
+def save_editable_file(root, logdir, name, path, text, base):
+    """Write text to one of the person's own files, exactly, all at once; return the text written.
+
+    base is the text GET /file gave when the file was opened (or the last
+    save's answer). Raises compile.RootError if path is refused or any part
+    of it is a link, StaleError if the file no longer holds base,
+    compile.InputError if it is no longer UTF-8 text, and ValueError if text
+    can't be written as UTF-8 (e.g. a lone surrogate from JSON's "\\ud800").
+    Every check runs before anything is written. Leading BOMs are left out.
+    """
+    editable_path(root, name, path)
+    full = writable_path(root, logdir, path)
+    refuse_linked_save(root, path)
+    # DECISIONS 2026-10-29 Chunk N4 D4: if the file was changed elsewhere
+    # since it was opened (an editor, a pull), saving would silently throw
+    # that change away. Read as GET /file reads it, so a BOM alone is no change.
+    if compile.read_markdown(full) != base:
+        raise StaleError(STALE_MESSAGE)
+    # DECISIONS 2026-10-29 N4-05 BOM: a save writes no BOM, even one pasted at
+    # the start. Then the text written is what GET /file reads back, so it
+    # works as the next base (Chunk N4 re-review CR-1). All of them, since
+    # read_markdown() drops only one.
+    text = text.lstrip("\ufeff")
+    # Encoded first, so text that can't be UTF-8 is refused before any write.
+    # Bytes, not text mode, so "\r\n" and "\n" are written as they came.
+    data = text.encode("utf-8")
+    mode = os.stat(str(full)).st_mode & 0o777
+    # As save_checklist_state(): a new temp file beside it, then one rename,
+    # so a crash never leaves half a file. The rename replaces the name
+    # itself, never writing through whatever is there.
+    handle, temp_name = tempfile.mkstemp(dir=str(full.parent), prefix=".save-")
+    try:
+        with os.fdopen(handle, "wb") as temp:
+            temp.write(data)
+        # mkstemp makes the file private (0600); keep the file's own mode.
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, str(full))
+    except BaseException:
+        os.unlink(temp_name)
+        raise
+    return text
+
+
+def send_editable_file(handler):
+    """GET /file?path=<own file>: {"path", "text", "fields"}, fields from marker_controls().
+
+    text is also the "base" the first save sends back (Chunk N4 D4).
+    """
+    paths = parse_qs(urlsplit(handler.path).query).get("path", [])
+    if len(paths) != 1:
+        send_text(handler, 400, "give one file: ?path=findings/<file>.md or field-notes/<name>/<file>.md")
+        return
+    settings = handler.server.settings
+    try:
+        text = read_editable_file(settings["root"], settings["name"], paths[0])
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    except (compile.InputError, OSError) as error:
+        send_text(handler, 500, "can't read the file: " + str(error))
+        return
+    send_json(handler, 200, {"path": paths[0], "text": text, "fields": marker_controls(text)})
+
+
+# Big enough for a finding with pasted log output, small enough that one
+# request can't fill the box's memory.
+MAX_SAVE_BYTES = 4 * 1024 * 1024
+SAVE_FIELDS = {"path", "text", "base", "fields"}
+SAVE_HINT = ('send {"path": text, "text": text, "base": text, "fields": [{"name": text,'
+             ' "marker": text, "body": text or null, "value": text}, ...]}')
+
+
+def good_save_field(field):
+    """True if field has the four keys apply_marker_values() and format_warnings() use."""
+    # Other keys, e.g. "control" from GET /file, are allowed and not used.
+    return (isinstance(field, dict)
+            and all(key in field for key in ("name", "marker", "body", "value"))
+            and isinstance(field["name"], str) and isinstance(field["marker"], str)
+            and isinstance(field["body"], (str, type(None))) and isinstance(field["value"], str))
+
+
+def read_save_request(handler):
+    """Return a save's {"path", "text", "base", "fields"} from a POST's JSON, or None after a 400.
+
+    base is the text the page started from (Chunk N4 D4). fields is the
+    field list the boxes were made from, each with its "value"; an empty
+    list saves the text alone (e.g. the textarea).
+    """
+    length = handler.headers.get("Content-Length", "")
+    if not (length.isascii() and length.isdigit()) or int(length) > MAX_SAVE_BYTES:
+        send_text(handler, 400, "send one save as JSON, at most " + str(MAX_SAVE_BYTES) + " bytes")
+        return None
+    try:
+        save = json.loads(handler.rfile.read(int(length)).decode("utf-8"))
+    except (ValueError, OSError):
+        # OSError: a short body times out, as in read_new_file_request().
+        send_text(handler, 400, "send one save as JSON, at most " + str(MAX_SAVE_BYTES) + " bytes")
+        return None
+    # Exactly these fields, so a typo is refused, not ignored.
+    if (not isinstance(save, dict) or set(save) != SAVE_FIELDS
+            or not isinstance(save["path"], str) or not isinstance(save["text"], str)
+            or not isinstance(save["base"], str) or not isinstance(save["fields"], list)
+            or not all(good_save_field(field) for field in save["fields"])):
+        send_text(handler, 400, SAVE_HINT)
+        return None
+    return save
+
+
+def save_file(handler):
+    """POST /file: apply the boxes' values, save, rescan (Fill-in Save).
+
+    Answers {"path", "text", "fields", "warnings"}: the saved text, its new
+    fields, then apply_marker_values()'s warnings and each filled box's
+    format warnings as "<name>: <warning>". Warnings never stop the save.
+    The saved text is the base for the next save. A file changed on disk
+    since base was read gets 409 and nothing is written (Chunk N4 D4).
+    """
+    save = read_save_request(handler)
+    if save is None:
+        return
+    text, warnings = apply_marker_values(save["text"], save["fields"])
+    for field in save["fields"]:
+        if field["value"] != "" and not is_note(field["marker"]):
+            for warning in format_warnings(field["name"], field["value"]):
+                warnings.append(field["name"] + ": " + warning)
+    settings = handler.server.settings
+    try:
+        text = save_editable_file(settings["root"], settings["logdir"], settings["name"],
+                                  save["path"], text, save["base"])
+    except StaleError as error:
+        send_text(handler, 409, str(error))
+        return
+    except compile.InputError as error:
+        send_text(handler, 500, "not saved: " + str(error))
+        return
+    except ValueError as error:
+        send_text(handler, 400, "not saved: " + str(error))
+        return
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    except OSError as error:
+        send_text(handler, 500, "not saved: " + str(error))
+        return
+    send_json(handler, 200, {"path": save["path"], "text": text,
+                             "fields": marker_controls(text), "warnings": warnings})
+
+
 # Where send_page() puts this run's token in the page.
 TOKEN_SLOT = "CPTC_TOKEN_SLOT"
 
@@ -1475,9 +1919,11 @@ GET_ROUTES = {"/": send_page,
               "/checklist": send_checklist,
               "/checklist-view": send_checklist_view,
               "/files": send_own_files,
-              "/new-data": send_new_data}
+              "/new-data": send_new_data,
+              "/file": send_editable_file}
 POST_ROUTES = {"/checklist-state": save_tick,
-               "/new-file": save_new_file}
+               "/new-file": save_new_file,
+               "/file": save_file}
 
 
 class NotebookHandler(BaseHTTPRequestHandler):
