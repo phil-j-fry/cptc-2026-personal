@@ -755,29 +755,38 @@ Reads the options, runs, prints each line and exits with the code.
 
 Shared with the notebook's tests; `notebook-breakdown.md` links here instead of repeating it.
 
-### Import setup + `TMP_DIR` - lines 1-21
-Lets the tests import the tools; sets the one folder tests may write to, `tools/tests/.tmp/`.
+### Import setup + `TMP_DIR` - lines 1-22
+Lets the tests import the tools; sets the one folder tests may write to, `tools/tests/.tmp/`. `os` (added in Chunk N7) only sets the fake logs' times.
 
 **If Operations asks:** "Shared setup for our tests. It lets the tests find our tool and gives them one scratch folder inside the repo that git ignores."
 
-### `make_worktree()` + `write_fake_file()` - lines 24-47
+### `make_worktree()` + `write_fake_file()` - lines 25-48
 One fake working copy per test, inside `.tmp/`, deleted when the test ends. Fake files can't escape it.
 
 **If Operations asks:** "Each test builds its own fake working copy with obviously fake files. It's deleted automatically when the test finishes."
 
 **Limit:** if a test run is stopped with Ctrl-C, cleanup doesn't run and a `worktree-*` folder stays in `.tmp/`. It's harmless (git ignores it) and can be deleted by hand.
 
-### `COMPLETE_FINDING` + `make_complete_finding()` - lines 50-107
+### `COMPLETE_FINDING` + `make_complete_finding()` - lines 51-108
 A fully filled fake finding that should pass every check.
 
 **If Operations asks:** "A sample finding with obviously fake data that should pass every check."
 
-### `LIBRARY_ENTRY` + `make_library_entry()` - lines 110-149
+### `LIBRARY_ENTRY` + `make_library_entry()` - lines 111-150
 A short fake findings-library entry: general text written, event fields still `[[...]]` markers, as `findings-library/README.md` describes a finished entry.
 
 **If Operations asks:** "Our real library is empty in this repo until finished entries come back from the team Drive, so the tests use a clearly fake entry of the same shape. It still has placeholders, so it's always DRAFT."
 
-### `remove_worktree()` - lines 152-163
+### `HOSTILE_LOG` + `HOSTILE_LOG_CLEANED` + `HOSTILE_CMDS` + `make_hostile_logs()` - lines 153-241
+Notebook Chunk N7, N6-00. A fake terminal transcript shaped like what `scripts/logged-shell.sh` saves, holding every case the log viewer's cleaner must handle: a `<script>` tag in a fake HTTP answer, CRLF and CRCRLF lines (a blank one too), a progress bar redrawn twice with lone CRs, a typo fixed with Backspace (BS then `ESC [ K`), CSI codes (colour, `?` mode, an intermediate byte), OSC ended by BEL and by ESC backslash, and the two-character escapes `ESC ( B`, `ESC ) 0`, `ESC =`, `ESC >`. `HOSTILE_LOG_CLEANED` is the same text after the spec's four cleaning steps, worked out by hand (a throwaway spec-order probe reproduced it; `CleanLogTextTests` checks the cleaner against it). `HOSTILE_CMDS` is the matching command index, in `logged-shell.sh`'s line format. `make_hostile_logs(logdir, base, mtime)` writes `<base>.log` and `<base>.cmds.log` as exact bytes and returns both paths.
+
+**If Operations asks:** "The log tests use a generated fake log full of terminal junk and a `<script>` tag; no real log or committed sample file is used."
+
+**Why generated, not a committed `.log` file:** `.gitignore` excludes `*.log`, and the bytes must be exact, which a text editor could quietly change.
+
+**Why the guards:** the log folder must be inside `.tmp/`, both names are checked to land directly in it before either is written (`../x` or an absolute base writes nothing; N6-00 adversary round 1), and an existing file is never replaced (`"xb"`), so two calls with the same base fail loudly. `mtime` sets both files' time, so list tests can order several logs.
+
+### `remove_worktree()` - lines 244-255
 Cleanup deletes only a folder directly inside `.tmp/`, and never follows symlinks.
 
 **If Operations asks:** "Cleanup only deletes the test's own scratch folder, and checks the location first."
@@ -786,12 +795,12 @@ Cleanup deletes only a folder directly inside `.tmp/`, and never follows symlink
 
 ### tests/test_support.py
 
-#### `finding_structure()` - lines 1-13
+#### `finding_structure()` - lines 1-14
 Lists a finding's `####` headings and `- **Label:**` lines, for the template drift test.
 
 **If Operations asks:** "A small helper that lists a finding's headings and labels, so a test can compare our sample finding with the real template."
 
-#### `MakeWorktreeTests` - lines 16-43
+#### `MakeWorktreeTests` - lines 17-44
 - the fake root sits in `.tmp/`, with no `.git`
 - requested files are written exactly
 - `../` paths are refused
@@ -799,7 +808,7 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 
 **If Operations asks:** "These test our test helpers: the fake folder lands in the right place, holds exactly the files we asked for, can't write outside itself, and is deleted afterwards."
 
-#### `MakeCompleteFindingTests` - lines 46-79
+#### `MakeCompleteFindingTests` - lines 47-80
 - no `[[`, and the heading starts `### F-001: `
 - the rationale has words; References has an `https://` link
 - at least one reproduction step, and an indented `Expected:` for each
@@ -807,6 +816,16 @@ Lists a finding's `####` headings and `- **Label:**` lines, for the template dri
 - a custom ID and title are used
 
 **If Operations asks:** "These prove our sample finding is really complete. One compares it with the real template, so if someone edits the template, the test tells us the sample is out of date."
+
+#### `MakeHostileLogsTests` - lines 83-206
+Notebook Chunk N7, N6-00 (the adversary's cases 1-3).
+- both files land in the log folder with the right names, not under `fixtures/`, and go when the worktree is cleaned up
+- a log folder outside `.tmp/` is refused and not made; a base with `../` or an absolute path is refused with nothing written
+- the files' bytes are exactly the constants; the transcript holds every hostile case, a plain CRLF as well as CRCRLF, and a progress line with two lone CRs
+- the command index's commands appear, as typed, in the cleaned transcript; the cleaned text has no control codes, keeps the `<script>` line and has as many lines as the transcript
+- two calls with different bases don't collide and keep their own times; the same base twice is refused and the first file is unchanged
+
+**If Operations asks:** "These test the fake-log helper itself: every hostile case is really in it, and it can't write outside its test folder."
 
 ### tests/test_compile.py
 
