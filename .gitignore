@@ -18,6 +18,7 @@
 
 # --- Tool exports and terminal logs (logs contain typed secrets) ---
 cptc-export-*.zip
+cptc-combined-*.md
 cptc-logs/
 *.log
 

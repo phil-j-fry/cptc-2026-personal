@@ -2,7 +2,7 @@
 
 Every block of `notebook.py`, its tests, and the related edits outside `tools/`. The test helpers in `tests/support.py` are shared with `compile.py` and are described in [compile-breakdown.md, section 2](compile-breakdown.md#2-test-helpers-testssupportpy). The rulebook says Operations may ask us to explain our code, so each entry has a line range, a one-line description, and **If Operations asks:** a plain answer a student can give.
 
-Line ranges match the code after Chunk N7 (the log viewer: N6-00..N6-05 with NT6-01, NT6-02, NT6-04 and NT6-05, the export fix C-N6-01, the face lift LOOK-01 and LOOK-02, and the README status lines C-N7-01, plus DECISIONS 2026-10-30 Chunk N7 G1-G8, L4, C-N6-01, LOOK-01 and the Chunk N7 review). Before it came Chunk N6 (the zip export: N5-01..N5-03 with NT5-01 and NT5-02, plus DECISIONS 2026-10-30 Chunk N6 E1, E2 and L10), Chunk N5 (the fill-in view on the page: N4-06..N4-09 with NT4-06 and NT4-07, plus the N5 decisions F1 C, F1d, F2, F3, F3a, F3b, F3c, F4 and L6, all DECISIONS 2026-10-29), Chunk N4 (the fill-in back end: marker scanning, box types, format warnings, the Save step, and the routes that open and save a file: N4-01..N4-05, then the Chunk N4 review change D4, the stale-save check, and its re-review CR-1, no BOM written), Chunk N3 (the New form and the own-file list in the left column: N3-01..N3-05, then the Chunk N3 review changes CR-1 and D1, D2, D5), Chunk N2 (checklists and the own-file list route: N2-01..N2-05) and Chunk N1 (safety and shell: N1-01..N1-08, plus its review changes C-N1-01..C-N1-03). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
+Line ranges match the code after Chunk N8 (the Compile view and the combined Markdown export: N7-01 with NT7-01, N8-01 and N8-02 with NT8-01 and NT8-02, the end-to-end tests NTX-01 and NTX-02, the `.gitignore` line D-10 and the spec fold N8-SPEC, the review fixes C-N8-01 (README status), C-N8-02 (a Copy button) and C-N8-03 (left-out warnings), plus DECISIONS 2026-11-11 decision 2 and 2026-11-11 Chunk N8 review). Before it came Chunk N7 (the log viewer: N6-00..N6-05 with NT6-01, NT6-02, NT6-04 and NT6-05, the export fix C-N6-01, the face lift LOOK-01 and LOOK-02, and the README status lines C-N7-01, plus DECISIONS 2026-10-30 Chunk N7 G1-G8, L4, C-N6-01, LOOK-01 and the Chunk N7 review). Before it came Chunk N6 (the zip export: N5-01..N5-03 with NT5-01 and NT5-02, plus DECISIONS 2026-10-30 Chunk N6 E1, E2 and L10), Chunk N5 (the fill-in view on the page: N4-06..N4-09 with NT4-06 and NT4-07, plus the N5 decisions F1 C, F1d, F2, F3, F3a, F3b, F3c, F4 and L6, all DECISIONS 2026-10-29), Chunk N4 (the fill-in back end: marker scanning, box types, format warnings, the Save step, and the routes that open and save a file: N4-01..N4-05, then the Chunk N4 review change D4, the stale-save check, and its re-review CR-1, no BOM written), Chunk N3 (the New form and the own-file list in the left column: N3-01..N3-05, then the Chunk N3 review changes CR-1 and D1, D2, D5), Chunk N2 (checklists and the own-file list route: N2-01..N2-05) and Chunk N1 (safety and shell: N1-01..N1-08, plus its review changes C-N1-01..C-N1-03). The implementor updates this file at the end of every review chunk; the code reviewer checks it.
 
 | Term | Meaning |
 |---|---|
@@ -47,19 +47,22 @@ Line ranges match the code after Chunk N7 (the log viewer: N6-00..N6-05 with NT6
 | clean / raw | the Logs view's two texts: cleaned for reading (`clean_log_text()`), or the log as saved |
 | evidence copy | a log copied byte for byte into `evidence/<name>` (N6-04) |
 | terminal command | `less -R '<full path>'`, shown for copying into a terminal; the notebook never runs it (N6-05) |
+| Compile (button) | the Compile view: runs `compile.run()` on the root in this process, in draft mode, and shows its screen lines and QA report (N7-01) |
+| combined file | `cptc-combined-<name>-<YYYYMMDDTHHMMSS>.md` in the root: the person's findings and notes in one Markdown file, for pasting over RDP when no file transfer works (Export (b), N8-01) |
+| source (combined) | one file the combined file takes: `findings/F-*.md`, then `field-notes/<name>/`'s `NOTE-`, `IR-`, `SU-` and `INJ-` `.md` files |
 | message block | a status, warning or error line set apart with a border and spacing (LOOK-01); its left bar is red for an error, green for done and amber for a warning or note (LOOK-02) |
 
 ## Size
 
-Measured after Chunk N7, the same way as at Chunk N1: docstring lines first, then blank lines, then lines starting `#` as comments, the rest as code. That method gives N4's 1190/384/275/229 on the N4 file. The `APP_PAGE` lines are counted the same way, so its blank lines count as blank and its CSS `#file-list` lines as comments.
+Measured after Chunk N8, the same way as at Chunk N1: docstring lines first, then blank lines, then lines starting `#` as comments, the rest as code. That method gives N4's 1190/384/275/229 on the N4 file. The `APP_PAGE` lines are counted the same way, so its blank lines count as blank and its CSS `#file-list` lines as comments.
 
-| Lines in `notebook.py` | Chunk N1 | Chunk N2 | Chunk N3 | Chunk N4 | Chunk N5 | Chunk N6 | Chunk N7 |
-|---|---|---|---|---|---|---|---|
-| code (the `APP_PAGE` included: 39, then 146, then 328 lines, unchanged at N4, 769 at N5, 830 at N6, 1086 at N7) | 190 | 481 | 946 | 1190 | 1614 | 1836 | 2309 |
-| docstrings | 54 | 124 | 265 | 384 | 395 | 452 | 507 |
-| comments | 77 | 146 | 238 | 275 | 280 | 327 | 394 |
-| blank | 55 | 112 | 183 | 229 | 256 | 287 | 345 |
-| **total** | **376** | **863** | **1632** | **2078** | **2545** | **2902** | **3555** |
+| Lines in `notebook.py` | Chunk N1 | Chunk N2 | Chunk N3 | Chunk N4 | Chunk N5 | Chunk N6 | Chunk N7 | Chunk N8 |
+|---|---|---|---|---|---|---|---|---|
+| code (the `APP_PAGE` included: 39, then 146, then 328 lines, unchanged at N4, 769 at N5, 830 at N6, 1086 at N7, 1243 at N8) | 190 | 481 | 946 | 1190 | 1614 | 1836 | 2309 | 2582 |
+| docstrings | 54 | 124 | 265 | 384 | 395 | 452 | 507 | 572 |
+| comments | 77 | 146 | 238 | 275 | 280 | 327 | 394 | 438 |
+| blank | 55 | 112 | 183 | 229 | 256 | 287 | 345 | 375 |
+| **total** | **376** | **863** | **1632** | **2078** | **2545** | **2902** | **3555** | **3967** |
 
 **The size guideline is dropped (DECISIONS 2026-10-28 size, user A):** the notebook will always be bigger than about 700–800 lines, so size is no longer flagged. What matters is that every line can be explained (R4), which is what this file is for.
 
@@ -813,7 +816,102 @@ N5-03. `POST /export`:
 
 **Limit:** the server answers one request at a time, so other requests wait while a large export is written.
 
-### `CR_RUN_LF_RE` + `ESCAPE_RES` - lines 1907-1921
+### `check_compile_outputs()` - lines 1907-1917
+N7-01 review round 1. Raises `compile.RootError` if `build/` or any of its four output files may not be written: each goes through `writable_path()`, so the log folder and `incoming/` are refused, both resolved.
+
+**If Operations asks:** "Compile writes four files in build/. Before it runs, the notebook checks none of them is in the log folder or incoming/, which it never writes."
+
+**Why (adversary N7-01 finding 1):** `compile.py` knows nothing of the log folder. With `$LOGDIR` set to the working copy, to its `build/`, or to a link pointing at `build/`, Compile overwrote the logs there. `compile.py` itself is unchanged.
+
+### `run_compile()` - lines 1920-1949
+N7-01. `POST /compile`. It calls `compile.run(<root>, None, False)` in this process (constraint 3: no subprocess), on the notebook's own root, in draft mode with the default index: what `python3 tools/compile.py --root <root>` does. The request has no fields and its body is never read; `answer()` closes the connection, so an unread body can't be read as a second request.
+
+| Result | Answer |
+|---|---|
+| compile ran (exit 0, or 1, which draft mode never gives) | 200 `{"exit_code", "qa", "lines"}`: `qa` is `build/qa-report.txt`'s text, `lines` the screen lines |
+| `build/` or an output in the log folder or `incoming/` | 403 `refused: ...`; `compile.run()` isn't called |
+| compile couldn't run (exit 2: a `.git` root, a linked or hard-linked output, an output that is a folder, a finding that isn't UTF-8 or can't be read) | 500 text: compile's own `compile failed: ...` line, naming the path; a character that can't be sent as UTF-8 (a Linux file name with a byte that isn't UTF-8) is written as a `\u` escape |
+
+**If Operations asks:** "The Compile button runs compile.py's own code inside the notebook, never a command, on your working copy, and shows exactly what the terminal would. It never touches report.md."
+
+**Why the escape (Chunk N8 CR-1):** `send_text()` encodes strictly, so a line naming such a file raised `UnicodeEncodeError` and the connection dropped with no answer, the same hole N8-02 round 1 closed for `/combined-export`.
+
+**N8 stop flag:** draft mode only; the `--final` pre-submission check stays a terminal command.
+
+**Limit:** the server answers one request at a time, so other requests wait while compile runs.
+
+### `COMBINED_NOTE_PREFIXES` + `folder_sources()` - lines 1952-1991
+N8-01. The note prefixes in their order (OQ-10). `folder_sources(root, folder, prefix)` returns the regular `<prefix>*.md` files directly in a folder, root-relative and sorted. Each match goes through `readable_path()` before `is_file()` looks at it, so a link pointing outside the root is refused (`RootError`) even when its target isn't a file. A missing folder, or a file where the folder should be, gives nothing; any other listing error (`PermissionError`) stops the export.
+
+**If Operations asks:** "Only your own folder's files with the right names, never a subfolder, and never through a link that leaves the working copy."
+
+**Why `os.listdir()`, not `glob()` (adversary N8-01 finding 1):** `glob()` treats a folder it may not read as empty, so the combined file was made with files silently missing.
+
+**Why a name that isn't UTF-8 stops it (adversary N8-02 finding 1):** Linux allows such a name; it can't be written in its heading (`UnicodeEncodeError`), so it gives `compile.InputError: file name isn't UTF-8: '<path>'` instead of a dropped connection. A name like that which matches no prefix is ignored.
+
+**N8 stop flags:** findings are `findings/F-*.md` only (compile's rule), so a `README.md` or scratch file there is left out; a dangling link, a folder or a FIFO named like a source is left out with no message, as `compile.py` and the file list do; an in-root link counts by the folder it sits in, wherever it points (OQ-17; ADM default C, a Limit).
+
+### `combined_sources()` - lines 1994-2005
+N8-01. Every source in order: `findings/F-*.md`, then `field-notes/<name>/`'s `NOTE-`, `IR-`, `SU-` and `INJ-` files, each group by filename.
+
+**If Operations asks:** "Your findings first, then your notes, incident reports, status updates and inject responses, each sorted by name."
+
+**N8 stop flag (ADM default A):** four prefix groups in that order, not one merged sort.
+
+### `left_out_names()` - lines 2008-2034
+C-N8-03 (2026-11-11 Chunk N8 review fix 2). One warning per name directly in a folder that ends in `.md` and starts with none of the given prefixes: `left out: <folder>/<name>: name doesn't start with <prefix> or <prefix> ...`, sorted. The folder goes through `readable_path()`; a missing folder, or a file in its place, gives nothing, and any other listing error stops the export. A name that isn't UTF-8 (Linux) is shown with `repr()`.
+
+**If Operations asks:** "If you saved a finding or note under a name without its prefix, the page tells you it isn't in the combined file, instead of leaving it out silently."
+
+**Why names only:** a left-out file is never opened, looked at or followed, so a FIFO can't hang it and a link can't show anything outside. So a folder, FIFO or link named `x.md` is named too; it is left out as well (adversary agreed, a stop-review note).
+
+### `combined_left_out()` - lines 2037-2044
+C-N8-03. `left_out_names()` for `findings/` with `F-`, then for `field-notes/<name>/` with the four note prefixes. Only those two folders, top level only.
+
+### `read_combined_source()` - lines 2047-2062
+N8-01. One source's text: opened with `open_regular_file()` (a FIFO swapped in since the listing can't make it wait), decoded as `utf-8-sig`. A BOM is dropped, as `compile.read_markdown()` does, and `\r\n` line endings stay. Not UTF-8 gives `compile.InputError` naming the relative path.
+
+**If Operations asks:** "Each file is read as compile reads it; a file that isn't UTF-8 stops the export with its name."
+
+### `combined_text()` - lines 2065-2076
+N8-01. Each source as `# <relative path>`, a blank line and its text, with a final line break added if missing; the parts joined by `\n---\n\n`.
+
+**If Operations asks:** "Each file under a heading of its path, with a line of three dashes between files."
+
+**Why the final line break:** straight after text, Markdown reads `---` as underlining that text into a heading.
+
+### `combined_file_name()` - lines 2079-2081
+N8-01. `cptc-combined-<name>-<YYYYMMDDTHHMMSS>.md`; ignored by `.gitignore` (D-10).
+
+### `write_combined()` - lines 2084-2129
+N8-01, N8-02. Writes the combined file and returns `(its path, the sources, its text)`:
+
+1. `combined_sources()` and `combined_text()`: everything is read before anything is written
+2. the name from the clock, then `writable_path()` (not `incoming/` or the log folder)
+3. anything at the literal `<root>/<name>` (a file, a link, even a broken one, a hard link or a folder) gives `FileExistsError`: `a combined file named <name> already exists; try again in a second`
+4. a temp file `.cptc-combined-*.part` in the root, then `os.link()` gives it the name, then the temp name is removed
+
+Any failure up to and including `os.link()` removes the temp file and passes the error on, so no file is left. Once the file has its name it is whole, so a failure to remove the temp name after that is still a success (Chunk N8 CR-2).
+
+**If Operations asks:** "It reads every file first and writes under a temporary name, so you get the whole file or nothing, and it never overwrites a file."
+
+**N8 stop flags (ADM default B):** nothing to combine still gives an (empty) file; a second export in the same second is refused, keeping the first; `os.link()`, not `os.replace()`, so a file that appears meanwhile is kept too (it needs a filesystem with hard links, as the zip does); one outside link, unreadable folder or file, or non-UTF-8 source stops the whole export.
+
+**Limit:** a crash mid-write, or a temp name that can't be removed after the link, can leave a `.cptc-combined-*.part` file in the root; it never matches `cptc-combined-*.md`.
+
+### `save_combined()` - lines 2132-2157
+N8-02. `POST /combined-export`. The request has no fields and its body is never read, so nothing sent can add logs or change the root, path or name. `combined_left_out()` runs first (C-N8-03), so a folder that can't be listed stops it before there is a file.
+
+| Result | Answer |
+|---|---|
+| file written | 200 `{"path": <full path>, "sources": [...], "text": <the file's text>, "left_out": [...]}` |
+| a path refused (`RootError`) | 403 `refused: ...` |
+| a file of that name already exists | 409 `not exported: a combined file named ... already exists; try again in a second` |
+| a source or name that isn't UTF-8, a folder or source that can't be read, a write error | 500 `not exported: ...` |
+
+**If Operations asks:** "It needs the token like every write, answers with where the file went, what went in and the text itself, and a failure says why and leaves no file."
+
+### `CR_RUN_LF_RE` + `ESCAPE_RES` - lines 2160-2174
 N6-01. The Logs section starts here: terminal transcripts are cleaned for display only, and the log itself is never changed. `CR_RUN_LF_RE` is a run of carriage returns ending in a line feed (`\r\n`, `\r\r\n`). `ESCAPE_RES` is the spec's four escape patterns, in its order:
 
 | Pattern | What it matches |
@@ -825,19 +923,19 @@ N6-01. The Logs section starts here: terminal transcripts are cleaned for displa
 
 **If Operations asks:** "These are exactly the patterns in our spec, so the cleaner removes those codes and nothing else."
 
-### `last_redraw()` - lines 1924-1928
+### `last_redraw()` - lines 2177-2181
 N6-01. Returns the text after a line's last carriage return, or the whole line if it has none.
 
 **If Operations asks:** "A progress bar redraws itself with carriage returns; the terminal showed only the last drawing, so that's all we show."
 
-### `apply_backspaces()` - lines 1931-1941
+### `apply_backspaces()` - lines 2184-2194
 N6-01. Applies one line's backspaces: each `\x08` deletes the character before it. A backspace with nothing before it on the line does nothing.
 
 **If Operations asks:** "A typo fixed with Backspace shows as the fixed word."
 
 **Decision (DECISIONS 2026-10-30 Chunk N7 G1, user A):** a backspace at the start of a line never deletes the line break. Run line by line, so one can't join two lines.
 
-### `clean_log_text()` - lines 1944-1956
+### `clean_log_text()` - lines 2197-2209
 N6-01. The spec's four steps, in order:
 1. each `\r+\n` becomes `\n`
 2. each line keeps only `last_redraw()`
@@ -856,7 +954,7 @@ Lines are split on `\n` only (like `grep -n`), so a form feed or a Unicode line 
 - **L1:** the spec's OSC pattern can cross line breaks. An OSC with no ending, followed later by a BEL (e.g. a tab-completion bell), hides everything between. Probe: `a\x1b]0;cut title\nline two\nline three\x07 end\n` cleans to `a end\n`. Raw shows the lines.
 - **L2:** a line ending in a lone `\r` with no `\n` yet (the last line of a live log, mid-redraw) shows empty.
 
-### `COMMANDS_SUFFIX` + `list_logs()` - lines 1959-2005
+### `COMMANDS_SUFFIX` + `list_logs()` - lines 2212-2258
 N6-02. Returns `(logs, refused)` for the Logs view:
 - `logs`: the names of the regular files directly in the log folder, newest modified first; the same time sorts by name. Folders, FIFOs and broken links aren't listed. A `.cmds.log` command index isn't listed.
 - `refused`: one line per link pointing outside the log folder (`path is outside the root: ...`), or name that isn't UTF-8.
@@ -869,19 +967,19 @@ A missing log folder gives `([], [])` and is not created.
 
 **Why the UTF-8 refusal:** a Linux file name can hold bytes that aren't UTF-8; the page couldn't put it in a URL to open it.
 
-### `MAX_LOG_BYTES` - lines 2008-2010
+### `MAX_LOG_BYTES` - lines 2261-2263
 N6-02. 5 MB (5 × 1024 × 1024 bytes): the most of one log the page gets.
 
 **Decision (DECISIONS 2026-10-30 Chunk N7 G4, user A):** an all-day transcript can be gigabytes, too much for the browser; the view shows the last 5 MB with a note pointing to the terminal command. The evidence copy has no cap.
 
-### `open_regular_file()` - lines 2013-2034
+### `open_regular_file()` - lines 2266-2287
 N6-04, taken out of N6-02's `read_log_tail()` so the evidence copy opens a log the same way. Opens a resolved path to read with `O_NOFOLLOW` and `O_NONBLOCK`, then checks the open descriptor with `fstat()`: anything but a regular file is closed and refused (`RootError: not a regular file: <path>`). Returns `(descriptor, stat)`.
 
 **If Operations asks:** "A pipe can't make the notebook wait, a link swapped in after the check isn't followed, and only a real file is read."
 
 **Why on the descriptor, before `fdopen()`:** `fdopen()` raises its own error for a folder and leaves the descriptor open (probed). The descriptor is closed on every way out that doesn't hand it back, including an `fstat()` that fails (App Dev Manager's add-on in N6-04, after C-N6-01).
 
-### `read_log_tail()` - lines 2037-2059
+### `read_log_tail()` - lines 2290-2312
 N6-02. Returns `(text, cut)`: a regular file's last `MAX_LOG_BYTES`, decoded. `cut` is how many bytes at the start were left out. It reads exactly the size the file had when opened. When the start is cut, the text starts after the first line break, so it doesn't begin with half a line, character or escape code.
 
 **If Operations asks:** "It reads the log as bytes, so nothing changes the line endings, and shows the end of a big one."
@@ -890,19 +988,19 @@ N6-02. Returns `(text, cut)`: a regular file's last `MAX_LOG_BYTES`, decoded. `c
 
 **Decisions (DECISIONS 2026-10-30 Chunk N7, user A):** **G3:** bytes that aren't UTF-8 show as U+FFFD (`errors="replace"`), in the raw and clean text and the commands alike; the log isn't changed. **G5:** the size at open is the snapshot: text a live shell adds while it reads is left for the next open.
 
-### `commands_name()` - lines 2062-2066
+### `commands_name()` - lines 2315-2319
 N6-02. `<name>.log` → `<name>.cmds.log`; `None` for a name that doesn't end in `.log` or is itself a command index.
 
 **If Operations asks:** "Our logging script saves both files with the same start, so the notebook finds the command list by name."
 
-### `terminal_command()` - lines 2069-2077
+### `terminal_command()` - lines 2322-2330
 N6-05. `"less -R " + shlex.quote(str(full_path))`, e.g. `less -R '/fake path/x.log'`. Text only.
 
 **If Operations asks:** "It's the command to open the log in a terminal, quoted the way the shell needs. The notebook only shows it; it never opens a terminal or runs anything (Constraint 3)."
 
 **Why `shlex.quote()` and nothing more:** it adds exactly the quotes a path with spaces or quotes needs (`it's` becomes `'it'"'"'s'`); more quotes around it would break it.
 
-### `read_log()` - lines 2080-2113
+### `read_log()` - lines 2333-2366
 N6-02 (and N6-05's `command`). What the Logs view shows for one log:
 
 | Key | What it holds |
@@ -920,12 +1018,12 @@ The path goes through `readable_log_path()` first: `..`, a path outside the log 
 
 **Notes (adversary agreed):** an in-folder link's command index is looked up by the link's name; its `command` names the file the link points to. The 5 MB cap is per file, the command index too.
 
-### `send_log_list()` - lines 2116-2124
+### `send_log_list()` - lines 2369-2377
 N6-02. `GET /logs`: `{"logs": [...], "refused": [...]}`; 500 `can't list the log folder: ...` if the folder can't be read (e.g. `$LOGDIR` is a file).
 
 **If Operations asks:** "The list as JSON; a problem with the folder gives a readable message."
 
-### `send_log()` - lines 2127-2145
+### `send_log()` - lines 2380-2398
 N6-02. `GET /log?path=<name>`:
 
 | Result | Answer |
@@ -938,31 +1036,31 @@ N6-02. `GET /log?path=<name>`:
 
 **If Operations asks:** "Log content only ever goes out as JSON, never as a page, so a `<script>` in a log can't run (Constraint 9)."
 
-### `EVIDENCE_NAME_RE` + `REDACT_WARNING` + `COPY_CHUNK_BYTES` - lines 2148-2154
+### `EVIDENCE_NAME_RE` + `REDACT_WARNING` + `COPY_CHUNK_BYTES` - lines 2401-2407
 N6-04. The evidence name's pattern `[A-Za-z0-9._-]+` (used with `fullmatch()`); the redact-secrets reminder the copy answers with; the copy's piece size, 1 MB.
 
 **If Operations asks:** "A name can only be letters, digits, dot, underscore and hyphen, so it can never be a path."
 
-### `check_evidence_name()` - lines 2157-2163
+### `check_evidence_name()` - lines 2410-2416
 N6-04. Returns the name, or raises `ValueError` naming it (`repr()`). `.` and `..` match the pattern but are refused; `.hidden` and `...` are allowed.
 
 **If Operations asks:** "A slash, a space, a newline or a letter outside A-Z is refused before anything happens."
 
 **Why `fullmatch()`:** with `^...$`, a name ending in a newline would pass (N1 D1's lesson).
 
-### `evidence_folder()` - lines 2166-2184
+### `evidence_folder()` - lines 2419-2437
 N6-04. Returns the root's `evidence/`, made if missing. Refused (`RootError`) if `evidence` is a symlink, even one inside the root; if `writable_path()` refuses it (outside the root, inside `incoming/` or the log folder); or if something that isn't a folder has that name.
 
 **If Operations asks:** "The copy always lands in the real evidence folder of this working copy."
 
 **Decision (DECISIONS 2026-10-30 Chunk N7 G7, user A):** a linked `evidence/` is refused, like the N4 D2 rule for saves: the copy must land where the team looks for it.
 
-### `copy_bytes()` - lines 2187-2195
+### `copy_bytes()` - lines 2440-2448
 N6-04. Copies exactly `size` bytes from a descriptor in 1 MB pieces, or up to the end if the file got shorter.
 
 **If Operations asks:** "A big log is copied in pieces, never read into memory whole."
 
-### `copy_log_to_evidence()` - lines 2198-2237
+### `copy_log_to_evidence()` - lines 2451-2490
 N6-04. Copies a log byte for byte to `evidence/<name>` and returns that root-relative path:
 
 1. `check_evidence_name()` (`ValueError`)
@@ -988,12 +1086,12 @@ Any failure removes the temp file and passes the error on.
 - **L5:** a log that shrinks during the copy is copied up to its new end.
 - a crash mid-copy can leave a `.cptc-evidence-*.part` file in `evidence/`.
 
-### `MAX_EVIDENCE_BYTES` + `EVIDENCE_FIELDS` + `read_evidence_request()` - lines 2240-2259
+### `MAX_EVIDENCE_BYTES` + `EVIDENCE_FIELDS` + `read_evidence_request()` - lines 2493-2512
 N6-04. A copy's body must be exactly `{"path": <log name>, "name": <evidence file name>}`, both text, at most 4096 bytes. Otherwise 400: `send the copy request as JSON, at most 4096 bytes` (bad `Content-Length`) or `send {"path": <log name>, "name": <evidence file name>}`.
 
 **If Operations asks:** "A missing or extra field is refused, so nothing is copied by a guess."
 
-### `save_evidence()` - lines 2262-2287
+### `save_evidence()` - lines 2515-2540
 N6-04. `POST /evidence`:
 
 | Result | Answer |
@@ -1010,49 +1108,52 @@ N6-04. `POST /evidence`:
 
 **Why `FileExistsError` before `FileNotFoundError` and `OSError`:** both are kinds of `OSError`.
 
-### `TOKEN_SLOT` + `APP_PAGE` - lines 2290-3384
-The one HTML page. The left column has the "Light / dark" button, the person's own files, a "New" button, a "Checklists" button, a "Logs" button and an "Export" button; the main pane shows what was picked. Inline CSS and JS only. `send_page()` replaces `TOKEN_SLOT` with this run's token.
+### `TOKEN_SLOT` + `APP_PAGE` - lines 2543-3794
+The one HTML page. The left column has the "Light / dark" button, the person's own files, a "New" button, a "Checklists" button, a "Logs" button, an "Export" button and a "Compile" button; the main pane shows what was picked. Inline CSS and JS only. `send_page()` replaces `TOKEN_SLOT` with this run's token.
 
-**If Operations asks:** "Black on white, or white on black when your system is in dark mode; the button swaps them. The left column lists your own files; clicking one opens it with a box for every marker and the whole file below, which saves itself as you type. New opens a form to make a file from a template; Checklists lists the checklists, and picking one shows each task as a checkbox. Logs lists your terminal logs; one opens cleaned or raw, searchable, with its exact commands, the command to open it in a terminal, and a box to copy it into evidence/. Export makes one zip of your own files for a teammate. Messages, warnings and errors sit in a bordered block so they're seen; its left bar is red for an error, green when something worked and amber for a warning, and the words say the same. There are no outside files or fonts, so it works with no internet."
+**If Operations asks:** "Black on white, or white on black when your system is in dark mode; the button swaps them. The left column lists your own files; clicking one opens it with a box for every marker and the whole file below, which saves itself as you type. New opens a form to make a file from a template; Checklists lists the checklists, and picking one shows each task as a checkbox. Logs lists your terminal logs; one opens cleaned or raw, searchable, with its exact commands, the command to open it in a terminal, and a box to copy it into evidence/. Export makes one zip of your own files for a teammate, and, as a fallback when files can't be moved, one Markdown file to copy over the clipboard. Compile runs compile.py on your working copy and shows its QA report. Messages, warnings and errors sit in a bordered block so they're seen; its left bar is red for an error, green when something worked and amber for a warning, and the words say the same. There are no outside files or fonts, so it works with no internet."
 
 | Part | Lines | What it does |
 |---|---|---|
-| `<meta name="cptc-token">` | 2303 | carries this run's token for the script |
-| `:root` and `@media (prefers-color-scheme: dark)` | 2306-2317 | follow the system's light or dark setting; the button's choice wins; each sets the one grey (LOOK-01) and the red, green and amber for the message bars (LOOK-02); dark is a soft dark grey, `#1e1e1e` with `#e6e6e6` text, not pure black (Chunk N7 review F1) |
-| `body`, `.columns`, `nav`, `main`, `h2`, `h3`, `p` | 2318-2327 | line height, padding and a 90rem page width; the line between the columns (`nav`'s border); `main` at most 65rem wide, and `min-width: 0` so long log lines wrap |
-| `button`, `:focus-visible` | 2328-2333 | one button style in the page's colours (grey when disabled); a clear outline on whatever has the keyboard focus |
-| text boxes, `select`, `textarea`, checkboxes, `nav button` | 2334-2341 | the page's colours with a grey border; each box under its label so they line up; text boxes at most 30rem; textareas full width in monospace; the left column's buttons full width |
-| `pre`, `#file-list ...`, `form div`, `main > div`, `mark` | 2342-2353 | one `<pre>` per text line (an empty line still takes up a line), monospace and wrapping; the file list between two grey rules, long paths wrap (the file buttons too, N4-06), the file just created in bold; row spacing; a NOTE in bold instead of the browser's yellow |
-| `.message`, `.log-text` | 2354-2365 | LOOK-01: a status, warning or error gets its own block (grey border, a thick left bar in the text colour, padding), hidden while empty; LOOK-02: `.message.error`, `.message.ok` and `.message.warning` colour only that bar red, green or amber; a log's text and commands framed, scrolling inside at 70% of the window's height |
-| `<nav>` | 2370-2377 | theme button, `div#file-list`, New, Checklists, Logs (N6-03), Export (N5-03) |
-| theme toggle | 2381-2388 | sets `data-theme` to the opposite of what shows now |
-| `element()` | 2393-2400 | makes an element and sets its text with `textContent` |
-| `markError()`, `markOk()`, `markWarning()` | 2402-2415 | LOOK-02: set a message block's class to `message error`, `message ok` or `message warning` (below) |
-| `showMessage()`, `getJson()` | 2417-2430 | fetch a JSON route; an error shows the server's text, marked as an error |
-| `showChecklistList()` | 2432-2446 | one button per checklist |
-| `showChecklist()` | 2448-2472 | each task a `label` holding an `input type=checkbox` and a `span`; each other line a `<pre>`; a status line for problems |
-| `saveTick()` | 2474-2502 | POSTs `{key, checked}` with `X-CPTC-Token`; the box is locked until the answer; if not saved, it goes back to its value from before the click and the reason shows |
-| `showFiles()` | 2506-2527 | each `/files` path as a button, in the order given (grouped by prefix); clicking one opens it in the fill-in view through `goTo()` (N4-06); the file just created in bold; each refused reason as `Not listed: ...` |
-| `loadFiles()` | 2529-2540 | fetches `/files`; an error goes to `showFileListError()` |
-| `showFileListError()` | 2542-2546 | LOOK-01: empties the list and shows the error text as one message block (before, the text was put straight in the list) |
-| `addField()` | 2548-2554 | one labelled control in its own row |
-| `showNewForm()` | 2556-2690 | the New form (below), with `refreshSuggestion()` |
-| `showExport()` | 2692-2751 | N5-03: the Export view (below) |
-| `showLogList()` | 2753-2772 | N6-03: one button per log name, in `/logs`' order; "No logs in the log folder."; each refused one as `Not listed: ...` |
-| `matchingLines()` | 2774-2784 | N6-03: the lines that contain the search text, ignoring case; all of it for an empty search (G6) |
-| `showLog()` | 2786-2834 | N6-03: one log (below) |
-| `showTerminalCommand()` | 2836-2863 | N6-05: the terminal command as a `<pre>`, and "Copy terminal command" (below) |
-| `showEvidenceCopy()` | 2865-2912 | N6-04: the copy into `evidence/` (below) |
-| `markerBox()` | 2914-2937 | N4-06: the box for one marker: a dropdown starting on "(not chosen)", a 4-row textarea, or a one-line input |
-| `AUTOSAVE_DELAY` | 2939-2940 | 2000 ms (N4-08) |
-| `openView` + `goTo()` | 2942-2957 | every move to another view (a file, New, Checklists, Logs, Export) goes through the open file's `leave()` (N4-08 C7, N4-09) |
-| `beforeunload` | 2959-2968 | closing the tab, reloading or leaving the site warns while boxes hold values, or while the file's text can't be saved (N4-09, N5 L6) |
-| `showFillIn()` | 2970-3356 | the fill-in view (below) |
-| New button | 3358-3362 | through `goTo()`, loads `/new-data`, then the form; an error shows the route's text instead |
-| Checklists button | 3364-3368 | through `goTo()`, loads the list |
-| Logs button | 3370-3374 | N6-03: through `goTo()`, loads `/logs`, then the list |
-| Export button | 3376-3378 | N5-03: through `goTo()`, opens the Export view |
-| `loadFiles();` | 3380 | the file list loads when the page opens |
+| `<meta name="cptc-token">` | 2556 | carries this run's token for the script |
+| `:root` and `@media (prefers-color-scheme: dark)` | 2559-2570 | follow the system's light or dark setting; the button's choice wins; each sets the one grey (LOOK-01) and the red, green and amber for the message bars (LOOK-02); dark is a soft dark grey, `#1e1e1e` with `#e6e6e6` text, not pure black (Chunk N7 review F1) |
+| `body`, `.columns`, `nav`, `main`, `h2`, `h3`, `p` | 2571-2580 | line height, padding and a 90rem page width; the line between the columns (`nav`'s border); `main` at most 65rem wide, and `min-width: 0` so long log lines wrap |
+| `button`, `:focus-visible` | 2581-2586 | one button style in the page's colours (grey when disabled); a clear outline on whatever has the keyboard focus |
+| text boxes, `select`, `textarea`, checkboxes, `nav button` | 2587-2594 | the page's colours with a grey border; each box under its label so they line up; text boxes at most 30rem; textareas full width in monospace; the left column's buttons full width |
+| `pre`, `#file-list ...`, `form div`, `main > div`, `mark` | 2595-2606 | one `<pre>` per text line (an empty line still takes up a line), monospace and wrapping; the file list between two grey rules, long paths wrap (the file buttons too, N4-06), the file just created in bold; row spacing; a NOTE in bold instead of the browser's yellow |
+| `.message`, `.log-text` | 2607-2618 | LOOK-01: a status, warning or error gets its own block (grey border, a thick left bar in the text colour, padding), hidden while empty; LOOK-02: `.message.error`, `.message.ok` and `.message.warning` colour only that bar red, green or amber; a log's text and commands framed, scrolling inside at 70% of the window's height |
+| `<nav>` | 2623-2631 | theme button, `div#file-list`, New, Checklists, Logs (N6-03), Export (N5-03), Compile (N7-01) |
+| theme toggle | 2635-2642 | sets `data-theme` to the opposite of what shows now |
+| `element()` | 2647-2654 | makes an element and sets its text with `textContent` |
+| `markError()`, `markOk()`, `markWarning()` | 2656-2669 | LOOK-02: set a message block's class to `message error`, `message ok` or `message warning` (below) |
+| `showMessage()`, `getJson()` | 2671-2684 | fetch a JSON route; an error shows the server's text, marked as an error |
+| `showChecklistList()` | 2686-2700 | one button per checklist |
+| `showChecklist()` | 2702-2726 | each task a `label` holding an `input type=checkbox` and a `span`; each other line a `<pre>`; a status line for problems |
+| `saveTick()` | 2728-2756 | POSTs `{key, checked}` with `X-CPTC-Token`; the box is locked until the answer; if not saved, it goes back to its value from before the click and the reason shows |
+| `showFiles()` | 2760-2781 | each `/files` path as a button, in the order given (grouped by prefix); clicking one opens it in the fill-in view through `goTo()` (N4-06); the file just created in bold; each refused reason as `Not listed: ...` |
+| `loadFiles()` | 2783-2794 | fetches `/files`; an error goes to `showFileListError()` |
+| `showFileListError()` | 2796-2800 | LOOK-01: empties the list and shows the error text as one message block (before, the text was put straight in the list) |
+| `addField()` | 2802-2808 | one labelled control in its own row |
+| `showNewForm()` | 2810-2944 | the New form (below), with `refreshSuggestion()` |
+| `showExport()` | 2946-3007 | N5-03: the Export view (below); it ends by calling `showCombinedExport()` |
+| `showCombinedExport()` | 3009-3101 | N8-02: "Combined Markdown (fallback)" under Export: a label saying it is only for when files can't be moved; "Make the combined file", locked until the answer; each click first clears the last status and text, so an earlier success never shows as this click's; success shows `Saved <path>` and each source (amber "Nothing to combine: no findings or notes yet." when empty), each left-out warning (amber, C-N8-03), and the text in a read-only textarea through `.value`; a failure shows the server's text in red and unlocks the button. C-N8-02: a Copy button, hidden until an export works and hidden again at each click, copies the textarea's text (`navigator.clipboard`); no clipboard or a refusal gives red "Couldn't copy it: select the text above and copy it by hand.", success green "Copied." |
+| `showCompile()` | 3103-3157 | N7-01: the Compile view: "Run compile", locked until the answer; each screen line in a `<pre>` (amber if any starts `WARNING:` or `ERROR:`, else green), then the QA report in a framed `<pre>`; a failure shows the server's text in red and unlocks the button |
+| `showLogList()` | 3159-3178 | N6-03: one button per log name, in `/logs`' order; "No logs in the log folder."; each refused one as `Not listed: ...` |
+| `matchingLines()` | 3180-3190 | N6-03: the lines that contain the search text, ignoring case; all of it for an empty search (G6) |
+| `showLog()` | 3192-3240 | N6-03: one log (below) |
+| `showTerminalCommand()` | 3242-3269 | N6-05: the terminal command as a `<pre>`, and "Copy terminal command" (below) |
+| `showEvidenceCopy()` | 3271-3318 | N6-04: the copy into `evidence/` (below) |
+| `markerBox()` | 3320-3343 | N4-06: the box for one marker: a dropdown starting on "(not chosen)", a 4-row textarea, or a one-line input |
+| `AUTOSAVE_DELAY` | 3345-3346 | 2000 ms (N4-08) |
+| `openView` + `goTo()` | 3348-3363 | every move to another view (a file, New, Checklists, Logs, Export, Compile) goes through the open file's `leave()` (N4-08 C7, N4-09) |
+| `beforeunload` | 3365-3374 | closing the tab, reloading or leaving the site warns while boxes hold values, or while the file's text can't be saved (N4-09, N5 L6) |
+| `showFillIn()` | 3376-3762 | the fill-in view (below) |
+| New button | 3764-3768 | through `goTo()`, loads `/new-data`, then the form; an error shows the route's text instead |
+| Checklists button | 3770-3774 | through `goTo()`, loads the list |
+| Logs button | 3776-3780 | N6-03: through `goTo()`, loads `/logs`, then the list |
+| Export button | 3782-3784 | N5-03: through `goTo()`, opens the Export view |
+| Compile button | 3786-3788 | N7-01: through `goTo()`, opens the Compile view |
+| `loadFiles();` | 3790 | the file list loads when the page opens |
 
 **The New form (`showNewForm()`):**
 - **Title:** a one-line text box, so a title can't split the heading it goes into.
@@ -1082,26 +1183,26 @@ There's no file name or path field anywhere: the notebook builds the name.
 
 | Part | Lines | What it does |
 |---|---|---|
-| state | 2977-3000 | `base` is `data.text`, the text as the server sent it; registers `openView` |
-| layout | 3002-3030 | builds the parts above once; the file text goes in with `fileText.value = data.text` |
-| `showBoxes()` | 3032-3056 | the status line, then a row per field in order: a NOTE as highlighted help (`<pre><mark>`), never a box; any other field its `markerBox()` labelled with its name, a TODO's guidance under it; then Save and the indicator |
-| `lockBoxes()` | 3058-3066 | locks or unlocks every box (for a Save, N4-09 round 2) |
-| `showUnsavedMark()` | 3068-3072 | ` unsaved` beside Save while any box holds a value, else nothing |
-| `boxesHoldValues()` | 3074-3080 | true if any box's value isn't empty |
-| `unsavedText()` | 3082-3097 | the textarea's text, then each box value as `NAME: value`, one line each (N5 F1d) |
-| `showUnsaved()` | 3099-3117 | "Your unsaved text": a read-only textarea and a Copy button (`navigator.clipboard`); if copying fails, it says to select and copy by hand |
-| `offerReload()` | 3119-3147 | after a 409: stops autosave and shows Reload. Reload fetches `GET /file` and shows a fresh view with `unsavedText()` kept, but only if this view is still the open one (an answer arriving after the user left draws nothing, N4-09 round 3); a failed reload leaves the view as it is |
-| `holdsUnsaved()` | 3149-3153 | box values, or text not saved after a refusal (`stopped` or `failureShown`) until a save works or Reload: what the close-tab warning covers (N5 L6) |
-| `leave()` | 3155-3174 | waits first for a save on its way; if a Save comes back with warnings the page stays so they are seen, and the next click leaves (Chunk N5 CR-2). Then asks once (`window.confirm`) while boxes hold values; Cancel stays with everything as it was; OK goes on to `leaveText()`, which doesn't put the box values in the file |
-| `quit()` | 3176-3183 | leaving for good: `stopped`, the timer cleared, then the next view, so this view sends nothing more (Chunk N5 CR-1) |
-| `leaveText()` | 3185-3204 | saved text leaves at once (`quit()`); a stopped or failed one shows the leave row; otherwise it saves the text now, then decides again |
-| `offerLeave()` | 3206-3215 | "This file's text isn't saved, so the page stays here." and a "Leave without saving" button, which leaves through `quit()` |
-| `runAfterSave()` | 3217-3224 | runs what was waiting for the save on its way (e.g. finishing a leave) |
-| `post()` | 3226-3277 | the one save POST, Save's and autosave's: `{path, text, base, fields}` with `X-CPTC-Token`, Save locked while it's on its way. Success: the answer's text is the next `base`, and "saved at HH:MM:SS" only if the textarea still holds the text sent. Refusal: "Not saved: <server text>", and Reload for a 409 |
-| `autosave()` | 3279-3301 | the textarea's text alone (`fields` empty); waits if a save is on its way; a success clears an old failure line and rebuilds the boxes and status only while no box holds a value |
-| box listeners | 3303-3305 | typing in a box or picking from a dropdown updates the indicator |
-| textarea `input` | 3307-3317 | "not saved yet"; restarts the 2-second timer unless stopped |
-| Save button | 3319-3355 | clears the pending autosave; sends every field in scan order (a NOTE's value empty) with the textarea and the boxes locked; success puts the saved text in the textarea, rebuilds the boxes and shows "Saved." and each warning in a `<pre>`, and notes whether there were warnings (for `leave()`); a refusal unlocks both and keeps every value |
+| state | 3383-3406 | `base` is `data.text`, the text as the server sent it; registers `openView` |
+| layout | 3408-3436 | builds the parts above once; the file text goes in with `fileText.value = data.text` |
+| `showBoxes()` | 3438-3462 | the status line, then a row per field in order: a NOTE as highlighted help (`<pre><mark>`), never a box; any other field its `markerBox()` labelled with its name, a TODO's guidance under it; then Save and the indicator |
+| `lockBoxes()` | 3464-3472 | locks or unlocks every box (for a Save, N4-09 round 2) |
+| `showUnsavedMark()` | 3474-3478 | ` unsaved` beside Save while any box holds a value, else nothing |
+| `boxesHoldValues()` | 3480-3486 | true if any box's value isn't empty |
+| `unsavedText()` | 3488-3503 | the textarea's text, then each box value as `NAME: value`, one line each (N5 F1d) |
+| `showUnsaved()` | 3505-3523 | "Your unsaved text": a read-only textarea and a Copy button (`navigator.clipboard`); if copying fails, it says to select and copy by hand |
+| `offerReload()` | 3525-3553 | after a 409: stops autosave and shows Reload. Reload fetches `GET /file` and shows a fresh view with `unsavedText()` kept, but only if this view is still the open one (an answer arriving after the user left draws nothing, N4-09 round 3); a failed reload leaves the view as it is |
+| `holdsUnsaved()` | 3555-3559 | box values, or text not saved after a refusal (`stopped` or `failureShown`) until a save works or Reload: what the close-tab warning covers (N5 L6) |
+| `leave()` | 3561-3580 | waits first for a save on its way; if a Save comes back with warnings the page stays so they are seen, and the next click leaves (Chunk N5 CR-2). Then asks once (`window.confirm`) while boxes hold values; Cancel stays with everything as it was; OK goes on to `leaveText()`, which doesn't put the box values in the file |
+| `quit()` | 3582-3589 | leaving for good: `stopped`, the timer cleared, then the next view, so this view sends nothing more (Chunk N5 CR-1) |
+| `leaveText()` | 3591-3610 | saved text leaves at once (`quit()`); a stopped or failed one shows the leave row; otherwise it saves the text now, then decides again |
+| `offerLeave()` | 3612-3621 | "This file's text isn't saved, so the page stays here." and a "Leave without saving" button, which leaves through `quit()` |
+| `runAfterSave()` | 3623-3630 | runs what was waiting for the save on its way (e.g. finishing a leave) |
+| `post()` | 3632-3683 | the one save POST, Save's and autosave's: `{path, text, base, fields}` with `X-CPTC-Token`, Save locked while it's on its way. Success: the answer's text is the next `base`, and "saved at HH:MM:SS" only if the textarea still holds the text sent. Refusal: "Not saved: <server text>", and Reload for a 409 |
+| `autosave()` | 3685-3707 | the textarea's text alone (`fields` empty); waits if a save is on its way; a success clears an old failure line and rebuilds the boxes and status only while no box holds a value |
+| box listeners | 3709-3711 | typing in a box or picking from a dropdown updates the indicator |
+| textarea `input` | 3713-3723 | "not saved yet"; restarts the 2-second timer unless stopped |
+| Save button | 3725-3761 | clears the pending autosave; sends every field in scan order (a NOTE's value empty) with the textarea and the boxes locked; success puts the saved text in the textarea, rebuilds the boxes and shows "Saved." and each warning in a `<pre>`, and notes whether there were warnings (for `leave()`); a refusal unlocks both and keeps every value |
 
 **Why `textContent` everywhere, never `innerHTML`:** file names, titles, checklist text, refusal reasons, marker labels, guidance, notes and warnings (even `<script>`) only ever show as text; a file's text only ever goes into a textarea through `.value`. They can never become part of the page. One test checks this in the served page (`PageSafetyTests`, NT4-06).
 
@@ -1150,23 +1251,23 @@ There's no file name or path field anywhere: the notebook builds the name.
 
 Each colour is at least 3:1 on its background (WCAG non-text contrast; the lowest is the light amber, 4.2:1), and the text at least 4.5:1; `LookTests` computes the ratios. A block whose outcome varies is marked when its text is set, so a New status that failed once and then worked turns from red to green (or amber, if it came with warnings). -> update `tools/BUILD-SPEC.md` Look and layout at the next spec fold.
 
-**Limit:** no unit test runs the script (Python has no built-in browser); the tests check the served page's text. At N2-04, N3-05 and at each N5 task the script was run in Node against a real notebook on 127.0.0.1, with a fake page whose `innerHTML`, `outerHTML` and `insertAdjacentHTML` raise an error and real timers. In N5 that covered: hostile file text, options, notes and guidance shown as text; Save with its warnings, rebuild and next `base`; a 409 and a link refusal keeping the boxes; the 2-second debounce; an edit made during a save; switching files with typing pending, with and without a 409 (C7); Reload with the kept text and box values and Copy; the indicator, the single leave warning, `beforeunload` (L6 included), locked boxes during a Save, and leaving after a failed save or during a Save (Chunk N5 CR-1, CR-2), and a Reload answering after the user left (N4-09 round 3). Those runs are not repo tests. In N6 the script was only checked with `node --check` (it parses); the Export view's clicks are on the user's browser list (M1-M8). In N7 it was checked with `node --check` after every task, and the Logs view was run in Node with a fake page whose `innerHTML` raises an error: clean and raw text, search (ignoring case, no match, empty), exact commands, the log list with a refused line, and the copy-command button with the clipboard working, refusing, and missing. Looks (LOOK-01) can't be checked that way; every view in light and dark is on the user's browser list. Real typing, clipboard, the browser's own dialogs, timing in a real browser, layout and light/dark mode are for the user's browser check (D-04).
+**Limit:** no unit test runs the script (Python has no built-in browser); the tests check the served page's text. At N2-04, N3-05 and at each N5 task the script was run in Node against a real notebook on 127.0.0.1, with a fake page whose `innerHTML`, `outerHTML` and `insertAdjacentHTML` raise an error and real timers. In N5 that covered: hostile file text, options, notes and guidance shown as text; Save with its warnings, rebuild and next `base`; a 409 and a link refusal keeping the boxes; the 2-second debounce; an edit made during a save; switching files with typing pending, with and without a 409 (C7); Reload with the kept text and box values and Copy; the indicator, the single leave warning, `beforeunload` (L6 included), locked boxes during a Save, and leaving after a failed save or during a Save (Chunk N5 CR-1, CR-2), and a Reload answering after the user left (N4-09 round 3). Those runs are not repo tests. In N8 the script was checked with `node --check`, and the adversary ran `showCombinedExport()` in Node with a fake page: success, a refusal, an empty export, a network failure and a retry, with the token, the lock, the clearing before each request and text-only output, and after C-N8-02/03 the Copy button's exact text across two exports with the clipboard resolving, refusing and missing, and the amber left-out warnings; the Compile view and both new views' looks are on the user's browser list. In N6 the script was only checked with `node --check` (it parses); the Export view's clicks are on the user's browser list (M1-M8). In N7 it was checked with `node --check` after every task, and the Logs view was run in Node with a fake page whose `innerHTML` raises an error: clean and raw text, search (ignoring case, no match, empty), exact commands, the log list with a refused line, and the copy-command button with the clipboard working, refusing, and missing. Looks (LOOK-01) can't be checked that way; every view in light and dark is on the user's browser list. Real typing, clipboard, the browser's own dialogs, timing in a real browser, layout and light/dark mode are for the user's browser check (D-04).
 
-### `GET_ROUTES` + `POST_ROUTES` - lines 3386-3401
-Which function answers which URL. GET: `/`, `/checklists`, `/checklist`, `/checklist-view`, `/files`, `/new-data`, `/file`, `/logs`, `/log`. POST: `/checklist-state`, `/new-file`, `/file`, `/export`, `/evidence`.
+### `GET_ROUTES` + `POST_ROUTES` - lines 3796-3813
+Which function answers which URL. GET: `/`, `/checklists`, `/checklist`, `/checklist-view`, `/files`, `/new-data`, `/file`, `/logs`, `/log`. POST: `/checklist-state`, `/new-file`, `/file`, `/export`, `/evidence`, `/compile`, `/combined-export`.
 
-**If Operations asks:** "A list of the URLs the notebook answers. GET routes never change anything; the five routes that write files are POSTs, and every POST needs the token."
+**If Operations asks:** "A list of the URLs the notebook answers. GET routes never change anything; the seven routes that write files are POSTs, and every POST needs the token."
 
-### `NotebookHandler` - lines 3404-3451
+### `NotebookHandler` - lines 3816-3863
 Answers each GET and POST: the guard first, then the route. Any other method gets the server's 501.
 
 | Part | Lines | What it does |
 |---|---|---|
-| `timeout = 2` | 3407-3412 | a connection waiting longer than 2 seconds for more of its request is closed (N3-05; 2 s since N5 F2) |
-| `do_GET()` / `do_POST()` | 3414-3418 | send GET and POST through `answer()` with their routes |
-| `answer()` | 3420-3437 | closes the connection after this one request; the guard runs before the body is read or any route runs, so a refused POST changes nothing; then the route is found by the path without its `?query` (Chunk N2); 404 for an unknown path |
-| `send_error()` | 3439-3448 | the server's own errors (e.g. 501 for any other method, 431 for too many headers) go out as text with the safety headers instead of as an HTML page, and close the connection |
-| `log_message()` | 3450-3451 | prints nothing per request, so the terminal stays readable |
+| `timeout = 2` | 3819-3824 | a connection waiting longer than 2 seconds for more of its request is closed (N3-05; 2 s since N5 F2) |
+| `do_GET()` / `do_POST()` | 3826-3830 | send GET and POST through `answer()` with their routes |
+| `answer()` | 3832-3849 | closes the connection after this one request; the guard runs before the body is read or any route runs, so a refused POST changes nothing; then the route is found by the path without its `?query` (Chunk N2); 404 for an unknown path |
+| `send_error()` | 3851-3860 | the server's own errors (e.g. 501 for any other method, 431 for too many headers) go out as text with the safety headers instead of as an HTML page, and close the connection |
+| `log_message()` | 3862-3863 | prints nothing per request, so the terminal stays readable |
 
 **If Operations asks:** "Every GET and POST goes through the guard before any route runs. Any other method, like PUT, gets a plain 'not implemented' (501) and nothing runs. Each connection carries only one request."
 
@@ -1180,32 +1281,32 @@ Answers each GET and POST: the guard first, then the route. Any other method get
 
 **Limit:** the server's own errors (400 for a bad request line, 414 for a too-long URL, 431 for too many headers, 501 for another method) are answered without the guard; no route runs and nothing changes. A request whose first line it can't parse at all gets an old-style answer with no headers, only the error text. A browser can't send such a request.
 
-### `parse_args()` - lines 3454-3476
+### `parse_args()` - lines 3866-3888
 `--name` (required), `--root` (default `~/cptc-work`), `--port` (default 8765). There is deliberately no option for the address.
 
 **If Operations asks:** "There's no setting that could open the notebook to the network: it's always 127.0.0.1. The root defaults to the working copy, never the current folder, for the same reason as `compile.py`."
 
-### `port_option()` - lines 3479-3485
+### `port_option()` - lines 3891-3897
 `--port` must be 1–65535, written in ASCII digits; otherwise argparse prints a readable error.
 
 **If Operations asks:** "A bad port gives a clear message instead of a crash."
 
-### `log_dir()` - lines 3488-3493
+### `log_dir()` - lines 3900-3905
 `$LOGDIR`, or `~/cptc-logs` if it isn't set or is empty.
 
 **If Operations asks:** "The same rule as our logging script, so the notebook looks where the logs were written."
 
-### `load_settings()` - lines 3496-3509
+### `load_settings()` - lines 3908-3921
 Reads the options and checks the root with `compile.validate_root()`: it must exist, be a folder and have no `.git`.
 
 **If Operations asks:** "The folder check runs before the server exists, so the notebook refuses to start in a folder that has its own `.git`, like our git clone."
 
-### `make_server()` - lines 3512-3521
+### `make_server()` - lines 3924-3933
 Creates the server on the literal `("127.0.0.1", port)`, with a new token and the settings.
 
 **If Operations asks:** "Literally 127.0.0.1: not empty or `0.0.0.0`, which would mean every network interface, and not `localhost`, a name the system looks up. Other boxes on the network can't reach it."
 
-### `main()` + `if __name__ == "__main__"` - lines 3524-3555
+### `main()` + `if __name__ == "__main__"` - lines 3936-3967
 Root check, then the server. Prints `Notebook: http://127.0.0.1:<port>` and a local-only reminder, then serves until Ctrl+C.
 
 **If Operations asks:** "If the folder is refused or the port is taken, it prints one readable line and exits with code 2. Ctrl+C stops it cleanly with exit code 0, and the server is always closed."
@@ -1555,12 +1656,12 @@ NT4-07, one marker-box Save through the real `POST /file`. Like `StaleSaveTests`
 
 **If Operations asks:** "One press of Save writes the file once, exactly as expected, and nothing else on the disk changes."
 
-#### `AppShellTests` - lines 4157-4244
-Updated in place at N3-05, N4-06, N5-03, N6-03 and N6-04; the display-safety asserts moved to `PageSafetyTests` at NT4-06.
-- the left column holds the theme button, the file list, New, Checklists, Logs and Export, in that order; the main pane is empty; the only visible words are "Light / dark", "New", "Checklists", "Logs" and "Export" (no Compile yet); the file list loads when the page opens
+#### `AppShellTests` - lines 4157-4246
+Updated in place at N3-05, N4-06, N5-03, N6-03, N6-04, N7-01 and N8-02; the display-safety asserts moved to `PageSafetyTests` at NT4-06.
+- the left column holds the theme button, the file list, New, Checklists, Logs, Export and Compile, in that order; the main pane is empty; the only visible words are "Light / dark", "New", "Checklists", "Logs", "Export" and "Compile"; the file list loads when the page opens
 - the page carries this run's token exactly once, and no leftover `TOKEN_SLOT`
 - a hostile token is escaped in the page
-- all five POSTs (a tick, a new file, a save of a file, an export, a log copied into evidence/) send `X-CPTC-Token`, and the script has 9 `fetch(` calls; it makes real checkboxes, locks a box while saving and restores its earlier value
+- all seven POSTs (a tick, a new file, a save of a file, an export, a log copied into evidence/, a compile, a combined export) send `X-CPTC-Token`, and the script has 11 `fetch(` calls; it makes real checkboxes, locks a box while saving and restores its earlier value
 - the New form's request is exactly `{type, title, nnn, library}`, with a number only when the type needs one and a library entry only for a Finding; the title box is one line; hidden rows follow the server's flags
 - every refused list (own files, library, IR scan), the warnings, the reload with the new file selected, and the IR suggestion fetched again after a create (Chunk N3 CR-1) are in the script
 - the page has the dark-mode media query, both button overrides and the click handler
@@ -1569,14 +1670,14 @@ Updated in place at N3-05, N4-06, N5-03, N6-03 and N6-04; the display-safety ass
 
 **Limit:** these check the served script's text, not its behaviour in a browser (see `APP_PAGE`).
 
-#### `PageSafetyTests` - lines 4247-4291
-NT4-06, the one automated page-source display-safety test. The served page has no `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write`, and has `textContent` and `.value`; `element()` sets text with `textContent`; a file's text goes in only as `fileText.value = data.text`, `fileText.value = result.text` and `kept.value = text`, and `data.text` appears only there and as `var base = data.text`. It also reads this test file with `ast` and fails if any other test asserts on those strings (`SAFETY_STRINGS`); that check was shown to fail on a copy with one such assert added to `AppShellTests`.
+#### `PageSafetyTests` - lines 4249-4295
+NT4-06, the one automated page-source display-safety test. The served page has no `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write`, and has `textContent` and `.value`; `element()` sets text with `textContent`; a file's text goes in only as `fileText.value = data.text`, `fileText.value = result.text` and `kept.value = text`, the combined file's text only as `combined.value = result.text` (N8-02), and `data.text` appears only there and as `var base = data.text`. It also reads this test file with `ast` and fails if any other test asserts on those strings (`SAFETY_STRINGS`); that check was shown to fail on a copy with one such assert added to `AppShellTests`.
 
 **If Operations asks:** "One test proves the page never turns text into page code, and that no other test quietly duplicates it."
 
 **Limit:** the duplicate check reads only `assertIn`/`assertNotIn` calls with exactly those strings, in this file.
 
-#### `FillInPageTests` - lines 4294-4522
+#### `FillInPageTests` - lines 4298-4526
 N4-06..N4-09, the fill-in view in the served script (its text, as in `AppShellTests`). The boxes themselves come from `marker_controls()` (`MarkerControlTests`); these check the page builds the matching element.
 - N4-06: a file opens through `goTo()` and `GET /file`; a dropdown starts on "(not chosen)" with the options as sent; a textarea or a one-line input; rows in field order with TODO guidance; a NOTE is highlighted help and its branch returns before any box; the path and the status line
 - N4-07: one `fetch("/file"` in the script, through `post()`: `{path, text, base, fields}` with the token; the answer's text becomes `base`; Save sends every field (a NOTE's value empty), clears the pending autosave, locks the textarea and the boxes; success shows "Saved." and each warning in a `<pre>`; a refusal keeps the boxes and `base` and shows "Not saved: ..."
@@ -1589,7 +1690,7 @@ N4-06..N4-09, the fill-in view in the served script (its text, as in `AppShellTe
 
 **Limit:** these check the script's text only. Behaviour, timing and the browser's own dialogs were tried in Node (see `APP_PAGE`) and are on the user's browser list.
 
-#### `EXPORT_FILES` + `EXPORT_MEMBERS` + `ExportManifestTests` - lines 4525-4811
+#### `EXPORT_FILES` + `EXPORT_MEMBERS` + `ExportManifestTests` - lines 4529-4815
 NT5-01 and the adversary's N5-01 cases. `EXPORT_FILES` holds one file in each export folder (one nested) and everything that must stay out: bob's field notes, `incoming/bob/`, `notebooks/`, `notes/`, `report.md` and an earlier zip in the root. `EXPORT_MEMBERS` is what the manifest should list.
 - only the four folders, in order; each member is its own file with its own text
 - logs left out by default; with them, every file in the log folder (nested and empty included) under `logs/`, never named by the folder's path; a 64 MB log is still taken (no size limit, E2)
@@ -1601,7 +1702,7 @@ NT5-01 and the adversary's N5-01 cases. `EXPORT_FILES` holds one file in each ex
 
 **If Operations asks:** "These prove the zip takes only your four folders, takes logs only when asked, and never follows a link."
 
-#### `EXPORT_NAME_RE` + `EXPORT_TIME` + `EXPORT_FOLDER_ENTRIES` + `ExportZipTests` - lines 4814-5205
+#### `EXPORT_NAME_RE` + `EXPORT_TIME` + `EXPORT_FOLDER_ENTRIES` + `ExportZipTests` - lines 4818-5209
 NT5-02 and the adversary's N5-02 cases. A fixed clock (10:30:00, not the earlier zip's time) gives a known name. The extracts happen only in a `make_worktree()` folder.
 - the name with the fixed clock and with the real one matches the pattern, in the root; `alice-smith` is used as it is
 - the namelist is the folder entries then the manifest, every name under the allowed folders; unzipped, the tree equals the mirror byte for byte (binary bytes 0-255, an empty file, a BOM + CRLF CSV, a nested file); logs only under `logs/`, byte for byte, and only when included; members are compressed; file times are kept; a time before 1980 becomes 1980, one after 2107 (year 2128) the last zip time, and one past year 9999 the first or last (Chunk N6 CR-2); a log bigger than the zip64 limit once copied (the limit patched to 300 bytes) is copied whole (CR-1)
@@ -1615,7 +1716,7 @@ NT5-02 and the adversary's N5-02 cases. A fixed clock (10:30:00, not the earlier
 
 **If Operations asks:** "These unzip the export in a test folder and compare it with your files byte for byte, and check every way a write can fail leaves no zip behind."
 
-#### `ExportRouteTests` - lines 5208-5327
+#### `ExportRouteTests` - lines 5212-5331
 N5-03, `POST /export` on a real notebook on 127.0.0.1.
 - the answer is exactly `{path, skipped}` with the full path of a zip in the root whose members are right; logs only when `true`; a link is reported and the zip still made
 - bad bodies (an empty object, a misspelt key, `"true"`, `1`, `null`, an extra key, a list, not JSON, not UTF-8) and a long body give the 400 before `write_export()` runs; a missing or wrong token, or the wrong Host, gives the 403 with `write_export()` never run; `GET /export` is a 404
@@ -1623,7 +1724,7 @@ N5-03, `POST /export` on a real notebook on 127.0.0.1.
 
 **If Operations asks:** "The Export button's route only writes with this run's token and a true-or-false answer, and every failure says so."
 
-#### `ExportPageTests` - lines 5330-5375
+#### `ExportPageTests` - lines 5334-5379
 N5-03, the Export view in the served script (its text, as in `AppShellTests`; display safety stays `PageSafetyTests`').
 - the Export button opens the view through `goTo()`; the box is set unticked, labelled "Include logs", with the warning's exact text
 - the request is exactly `{include_logs: logs.checked}`; success shows `Saved <path>` and "Left out of the zip:" with each line; a failure shows its text and unlocks the button
@@ -1632,7 +1733,54 @@ N5-03, the Export view in the served script (its text, as in `AppShellTests`; di
 
 **Limit:** these check the script's text only; the clicks are on the user's browser list (M1-M8).
 
-#### `LogPageTests` - lines 5378-5444
+#### `EVENT_FILES` + `EVENT_WARNINGS` + `CompileRouteTests` - lines 5382-5751
+NT7-01, `POST /compile` on a real notebook on 127.0.0.1, with the 'event-scenario' note's base corpus (clean F-001, incoming F-002 with IP-first output, draft F-003, the index, SU/IR/INJ and a marker only in `report.md`) and a decoy `~/cptc-work` in a fake HOME.
+- the endpoint matches a direct `compile.run()` on the same root: exit code, QA text, screen lines and all four output files; stale outputs are rewritten; `compile.run` is called once with `(root, None, False)`; the decoy home is untouched
+- the event corpus gives its exact screen lines (the four WROTE lines, nine WARNINGs, `QA: 3 findings; 2 READY; 1 DRAFT; 9 warnings; 0 errors`) and READY/DRAFT lines; nothing mentions `report.md`; sources, `report.md`, the logs and the home are unchanged; compiling twice gives the same answer
+- a missing index and `report.md` still compile, as `compile.run()` does
+- exit 2, each with its exact `compile failed: ...` text and nothing changed: a `.git` root, `build/` as a link, an output linked or hard-linked to `report.md`, an output that is a folder, a cp1252 finding (its path named), a finding with no permissions; a failure line naming a non-UTF-8 file name still answers, with a `\u` escape (CR-1); then a refused compile followed by a good one
+- the round 1 fix: the log folder being `build/`, the root, or an outside link to `build/`; the log folder at the last output only (so all four are checked before compile runs); `incoming/` linked to `build/`: each a 403 with `compile.run` never called and nothing changed; a log folder elsewhere in the root is allowed
+- no or wrong token, or the wrong Host: 403, `compile.run` never called; `GET /compile` is a 404
+
+**If Operations asks:** "The Compile button gives exactly what the terminal gives on the same folder, and every way it can be refused or fail is readable and changes nothing."
+
+#### `CompilePageTests` - lines 5754-5792
+N7-01, the Compile view in the served script (display safety stays `PageSafetyTests`'): the button opens it through `goTo()`; the request is a token POST with no fields; the screen lines and the QA report show, amber or green; a failure shows its text and unlocks the button.
+
+**If Operations asks:** "The page has the Compile button and shows what compile said."
+
+**Limit:** these check the script's text only; the clicks are on the user's browser list.
+
+#### `COMBINED_NAME_RE` + `COMBINED_NOW` + `COMBINED_FILE` + `CombinedExportTests` - lines 5795-6223
+NT8-01 and the adversary's N8-01 cases, on `write_combined()` with a fixed clock. Every success also checks the returned text is the file's bytes.
+- the exact name and path in the root; files written out of order and `os.listdir()` reversed still give findings, then NOTE, IR, SU, INJ, each by filename; the exact text with path headings and `---`; every source byte unchanged and the export the only new file
+- only own sources: `incoming/`, other people's notes, `evidence/`, `tracker/`, `notes/`, `templates/`, `report.md`, `build/`, earlier combined files and zips, `README.md`, `.txt`, deeper files and other `.md` names stay out; no sources gives an empty file
+- markers, notes, fences, pipes, backticks, `$`, `<script>`, Unicode, a `---` and a heading inside come through as text; a final line break is added; CRLF kept and a BOM dropped (exact bytes); cp1252 stops it with its path
+- links: `findings/`, `field-notes/`, `field-notes/alice` and a source pointing outside are refused with the path, nothing made; an outside link to nothing is refused, not left out; an in-root link is taken by its folder; a dangling in-root link, a folder and a FIFO named like sources are left out; a FIFO swapped in after the listing is refused, not read
+- an unreadable `findings/`, `field-notes/` or `field-notes/alice/` (round 1 fix) and an unreadable source stop it with no file (skipped when run as root); a file in place of a folder gives nothing; a name that isn't UTF-8 stops it (round 2 of N8-02), one that matches no prefix is ignored
+- C-N8-03: `combined_left_out()` names each wrong-named `.md` once, sorted (with `os.listdir()` reversed), and not the prefixed ones; `.txt`, subfolders, other people's notes, `incoming/`, the root and other folders give nothing, nor do missing folders; an outside link, a dangling link, a FIFO, a folder and a non-UTF-8 file named `.md` are named without `open_regular_file()` being called, and the export still works; a non-UTF-8 name is shown with `repr()`; a folder linked outside is refused
+- the name already taken by a file, a link to `report.md`, a hard link to it, a folder or a broken link: `FileExistsError` with nothing changed; a link pointing outside or the log folder being the root: `RootError`; a later read failure, a failed `os.link()` and a file appearing meanwhile leave no export and no temp file (the other file kept); a temp name that can't be removed after the link is still a success, the file whole (CR-2)
+
+**If Operations asks:** "These prove the combined file holds only your own findings and notes, in the right order, exactly as written, and that every failure leaves nothing behind."
+
+#### `CombinedRouteTests` - lines 6226-6407
+NT8-02, `POST /combined-export` on a real notebook on 127.0.0.1.
+- with a fixed clock, the file is saved in the root and the answer is exactly `{path, sources, text}`, the text the file's bytes; HTML-shaped text is just text; findings, `incoming/`, `report.md` and the logs are unchanged
+- a body asking for logs, a root, a path or another name is ignored
+- C-N8-03: wrong-named `findings/other.md` (HTML-shaped Unicode) and `field-notes/alice/web01.md` (not UTF-8): 200 with both exact warnings, the file and sources as without them, no warning or left-out text in the file, sources unchanged; after removing one, the next export names only the other
+- no or wrong token, or the wrong Host: 403, `write_combined()` never called, nothing changed; a good request afterwards still works; `GET` is a 404
+- a link pointing outside and the log folder being the root: 403 naming the path; the same second: 409, the first kept; a cp1252 source, a non-UTF-8 name, a folder with no permissions and a failed write: 500 with no file
+
+**If Operations asks:** "The combined-file route writes only with the token, answers with the file, and every failure is readable and leaves nothing."
+
+#### `CombinedPageTests` - lines 6410-6480
+N8-02, the combined action in the served script: it sits at the end of the Export view under its fallback heading and label; the request is a token POST with no fields; the saved path, the sources, the empty-export note and the read-only textarea show; a new click clears the last result first, the Copy button and its message included; C-N8-02: Copy is hidden until an export works, copies the shown text, and gives the by-hand message with no clipboard or a refusal; C-N8-03: left-out lines show in amber; a failure shows its text and unlocks the button (two `notMade` functions, the zip's and this one's).
+
+**If Operations asks:** "The page has the fallback under Export and shows where the file went and its text."
+
+**Limit:** these check the script's text only; the adversary ran it in Node (see `APP_PAGE`), and the clicks are on the user's browser list.
+
+#### `LogPageTests` - lines 6483-6549
 N6-03, the Logs view in the served script (its text; display safety stays `PageSafetyTests`').
 - the Logs button opens the list through `goTo()`, so a fill-in view with unsaved boxes asks first (N4-09)
 - each listed name opens `/log?path=` with `encodeURIComponent()`; the empty-list line and each `Not listed: ...` line (as a message block)
@@ -1644,7 +1792,7 @@ N6-03, the Logs view in the served script (its text; display safety stays `PageS
 
 **If Operations asks:** "The page has the search, the raw switch, the warning with the terminal fallback, and the exact commands."
 
-#### `CleanLogTextTests` - lines 5447-5562
+#### `CleanLogTextTests` - lines 6552-6667
 NT6-01 and the adversary's cases 4-10, on `clean_log_text()`.
 - `a\r\nb\r\r\nc` → `a\nb\nc`; blank Windows lines kept, none added; a long `\r` run before `\n` is one line break
 - a progress redraw keeps its last part; redraws on neighbouring lines are separate; a line ending in a lone `\r` keeps the empty last part (L2); a redraw before a `\r\r\n` ending
@@ -1657,12 +1805,12 @@ NT6-01 and the adversary's cases 4-10, on `clean_log_text()`.
 
 **If Operations asks:** "These feed the cleaner every kind of terminal code we expect and check it in the spec's order, so a Windows line, a progress bar and a fixed typo all come out right."
 
-#### `log_state()` + `write_log_bytes()` - lines 5565-5587
+#### `log_state()` + `write_log_bytes()` - lines 6670-6692
 Helpers for the log tests. `log_state()` returns every file in a log folder with its bytes, size, change times, inode and mode, to prove nothing changed. `write_log_bytes()` writes one fake log's exact bytes, optionally with a set time.
 
 **Why no access time:** reading a file may update it, and that isn't a change to the log (adversary agreed).
 
-#### `LogListTests` - lines 5590-5669
+#### `LogListTests` - lines 6695-6774
 NT6-02 on `list_logs()`.
 - newest modified first, by time not by name; the same time by name; the order doesn't depend on the disk (`listdir` patched to reverse)
 - a command index is left out, even one with no transcript (G2); any regular file is listed
@@ -1672,7 +1820,7 @@ NT6-02 on `list_logs()`.
 
 **If Operations asks:** "The list is newest first and never shows a link out of the log folder."
 
-#### `LogReadTests` - lines 5672-5863
+#### `LogReadTests` - lines 6777-6968
 NT6-02 and the adversary's cases 13-19, on `read_log()` and `read_log_tail()`.
 - the hostile sample's raw, clean, commands, notes and command are exact; raw keeps every control code
 - reading twice and a refused read change nothing (`log_state()`)
@@ -1684,7 +1832,7 @@ NT6-02 and the adversary's cases 13-19, on `read_log()` and `read_log_tail()`.
 
 **If Operations asks:** "These prove the raw log reaches the page untouched, a big or growing log can't hang or swamp the page, and nothing ever writes to the log folder."
 
-#### `LogRouteTests` - lines 5866-5943
+#### `LogRouteTests` - lines 6971-7048
 NT6-02 through a real server; `tearDown()` checks the log folder is unchanged after every test.
 - `/logs` is JSON, newest first; `/log` is JSON with raw, clean, commands, notes and the command, and no raw ESC byte in the body
 - a wrong Host is refused on both
@@ -1693,10 +1841,10 @@ NT6-02 through a real server; `tearDown()` checks the log folder is unchanged af
 
 **If Operations asks:** "Through the real server, logs only ever go out as JSON with the safety headers."
 
-#### `OpenRegularFileTests` - lines 5946-5964
+#### `OpenRegularFileTests` - lines 7051-7069
 - when `fstat()` fails, `open_regular_file()` closes the descriptor (`os.close` called once, the count of open descriptors in `/dev/fd` unchanged) and passes the error on
 
-#### `sha256()` + `EvidenceCopyTests` - lines 5967-6158
+#### `sha256()` + `EvidenceCopyTests` - lines 7072-7263
 NT6-04 and the adversary's cases 28-33, on `copy_log_to_evidence()`.
 - the copy is byte for byte (SHA-256 and size); `evidence/` is made if missing and used if there; a command index and a log with cp1252 bytes and control codes copy exactly; no 5 MB cap; a copy in several pieces (`COPY_CHUNK_BYTES` patched to 7) is exact
 - text added during the copy is left out (G8)
@@ -1707,7 +1855,7 @@ NT6-04 and the adversary's cases 28-33, on `copy_log_to_evidence()`.
 
 **If Operations asks:** "These prove the evidence copy is the exact log, never overwrites anything, and never writes into the log folder."
 
-#### `EvidenceRouteTests` - lines 6161-6246
+#### `EvidenceRouteTests` - lines 7266-7351
 NT6-04 through a real server (the adversary's case 34); `tearDown()` checks the log folder is unchanged.
 - success is JSON with the path and the redact warning, and the copy is exact
 - no token, a wrong token and a wrong Host are refused, with nothing made
@@ -1715,13 +1863,13 @@ NT6-04 through a real server (the adversary's case 34); `tearDown()` checks the 
 
 **If Operations asks:** "Copying needs the token, and every refusal changes nothing."
 
-#### `EvidencePageTests` - lines 6249-6284
+#### `EvidencePageTests` - lines 7354-7389
 N6-04, the copy in the served script.
 - every open log gets the copy form with its name box
 - the redact warning shows before the copy and the server's warning after it
 - the request is exactly `{path, name}`; the button is locked until the answer, and a refusal shows its text and unlocks it
 
-#### `TerminalCommandTests` - lines 6286-6357
+#### `TerminalCommandTests` - lines 7391-7462
 NT6-05 and the adversary's cases 36-39.
 - `/fake path/x.log` gives exactly `less -R '/fake path/x.log'`; a plain path needs no quotes; a quote, a newline, Unicode, a leading dash and `$(id)` with backticks each equal `"less -R " + shlex.quote(path)`, and `it's` gives `'it'"'"'s'`; a `Path` gives the same text
 - `read_log()` uses the checked full path (a folder and name with spaces and a quote); a link inside gives the file it points to; refused paths never reach `terminal_command()`
@@ -1729,18 +1877,18 @@ NT6-05 and the adversary's cases 36-39.
 
 **If Operations asks:** "The command is built by the standard quoting function and is only text; the tests prove nothing is run."
 
-#### `TerminalCommandPageTests` - lines 6360-6390
+#### `TerminalCommandPageTests` - lines 7465-7495
 N6-05, the command in the served script: a `<pre>` under the log's name; the button passes the same text to `navigator.clipboard.writeText()`; with no clipboard or a refusal, the copy-by-hand line.
 
 **Limit:** the clicks are on the user's browser list (cases 41-42).
 
-#### `LookTests` - lines 6392-6572
+#### `LookTests` - lines 7497-7691
 LOOK-01 and LOOK-02, the style in the served page.
 - the only colours are the theme's: black, white, the two greys, and the red, green and amber of each theme; the light line twice and the dark line twice (no black background: F1); no `rgb`; `var(--error)`, `var(--ok)` and `var(--warning)` are each used once, by the bars; `mark` isn't yellow
 - every colour is readable on its background: the WCAG ratio is computed, at least 4.5:1 for text and 3:1 for the grey and the three bars
 - only the message bar is red, green or amber, and `markError()`, `markOk()` and `markWarning()` set exactly those classes
-- each error (15 places), OK (6) and warning (9: five warnings and notes, and four done blocks holding warnings) mark is where its text is set, with exact counts
-- the `.message` rule, hidden while empty; the plain message areas (the New, Export, evidence copy and copy-command status before an answer, the fill-in messages, status line and "saved at" line, and "not saved yet" set back to plain) carry the `message` class
+- each error (19 places), OK (9) and warning (12: five warnings and notes, four done blocks holding warnings, Compile's problems, an empty combined file and left-out files) mark is where its text is set, with exact counts
+- the `.message` rule, hidden while empty; the plain message areas (the New, Export, combined file, Compile, evidence copy and copy-command status before an answer, the fill-in messages, status line and "saved at" line, and "not saved yet" set back to plain) carry the `message` class
 - the file list's error goes through `showFileListError()`
 - the script sets only the classes `selected`, `message`, `message error`, `message ok`, `message warning` and `log-text`, and never reads one back
 - the log text is framed and in monospace; the focus outline, disabled buttons, boxes under labels, the column line and the page width
@@ -1750,7 +1898,54 @@ LOOK-01 and LOOK-02, the style in the served page.
 
 **Limit:** looks can't be checked without a browser; every view in light and dark is on the user's browser list.
 
+#### `NTX_CHECKLIST` + `NTX_LOG` + `ntx_files()` + `NtxServerTestCase` - lines 7694-7749
+NTX-01 and NTX-02's shared setup: a fake working copy with the fake templates plus the real `templates/finding.md`, a checklist, a placeholder finding, `incoming/bob/`'s clean F-002 and `report.md`, and the hostile fake logs. `request()` checks the safety headers on every answer; `everything()` is every name, its bytes or link target, in the working copy and the log folder.
+
+#### `RouteMatrixTests` - lines 7752-7894
+NTX-01, every built route against the guards (Constraints 4, 8, 9).
+- the route tables are exactly the written-out lists (9 GETs, 7 POSTs), so a route added without being listed fails; each has a valid request
+- each valid request reaches its route's success branch (200); only `/` is HTML, the rest JSON or plain text
+- every GET and POST with a wrong Host (`evil.example`, `localhost`), and every POST with no, a wrong or an empty token: the exact 403, the route (swapped for a mock) never called, and nothing in the working copy or log folder changed
+- a refused `/compile` or `/combined-export` (wrong Host, no token) whose body is a whole valid request, on HTTP/1.0 and patched HTTP/1.1, read until close: exactly one 403 and nothing changed
+- the routes that take a path (`/checklist`, `/checklist-view`, `/file`, `/log`, and POST `/file`, `/evidence`) refuse `../../etc/passwd`, an absolute outside path, a NUL and an outside link at each level, as plain text, with no outside text in the answer and nothing changed
+
+**If Operations asks:** "One table of every URL the notebook answers, each tried with a good request and with every kind of bad one: nothing runs or changes unless the request is from our page."
+
+**Limit:** the new routes' own error branches stay in `CompileRouteTests` and `CombinedRouteTests` (adversary agreed); unsupported methods stay in `RequestGuardTests`.
+
+#### `NTX_VALUES` + `NTX_CHOICES` + `FakeUserWorkflowTests` - lines 7897-8112
+NTX-02, one fake tester's day through every built feature, over HTTP:
+- open the page; tick a checklist task and reload it; create a Finding from the real template and a Note
+- fill-in: every box of the finding filled with coherent fake data (the set of box names must equal `NTX_VALUES`, so none is skipped) and both dropdowns, each NOTE deleted from the text as a tester would (a save never removes notes), then Save: no warnings, no boxes and no `[[` left, and the reread equals the disk
+- the carry-forward (user A, 2026-10-22): `compile.run()` on the same root gives READY with no QA lines; the Compile button gives the same answer and four files; `--final` passes
+- a hand edit puts a marker back: the button shows DRAFT and its warning, `--final` blocks it with the same line as an error, and a copy pasted into `report.md` is never rewritten; a marker only in `report.md`: draft clean, `--final` blocks it
+- Logs: the hostile log raw, clean and its commands; copied into `evidence/` byte for byte
+- the zip without logs, then with logs a second later: exact member files and bytes
+- the combined file: the saved finding then the note, not compile's `findings-combined.md` nor `report.md`; after a note edit a second export shows the change; both files on disk equal their answers
+- `incoming/` and the log folder are unchanged throughout
+
+**If Operations asks:** "One test plays a whole day as a tester would, from ticking a checklist to exporting, and proves a finding filled in the notebook passes compile with no problems."
+
+**Limit:** the real template has no repeated plain marker left once New fills `FINDING_ID`, so repeated names stay covered by `ApplyMarkerValueTests`. The browser half of the day (a half-filled box, a failed save, leaving and coming back) is on the user's browser list.
+
 ## 4. Related edits outside tools/
+
+Chunk N8 inside `tools/` changed `tools/notebook.py`, `tools/tests/test_notebook.py`, `tools/BUILD-SPEC.md` (N8-SPEC and C-N8-03, below), `tools/README.md` (C-N8-01, below) and this file. Its one related edit outside `tools/` is `.gitignore` (D-10, below).
+
+### `.gitignore` (D-10)
+One line, `cptc-combined-*.md`, right after `cptc-export-*.zip` (OQ-18), so a combined file in the working copy is never committed. The file's other uncommitted change (two `_staging/` lines removed) is the user's own and not part of this chunk.
+
+**If Operations asks:** "Like the zip, the combined file is personal event data, so git ignores it."
+
+### `tools/BUILD-SPEC.md` (N8-SPEC)
+Wording only, folding in 2026-11-11 decision 2: Tool 2 Export (b) is "in scope (2026-11-11 decision 2, despite `TODO.md` item 11's earlier cut)" and a fallback for pasting over RDP, with its old "last in the cut order", "unconfirmed" and "build this last" wording gone; Compile is "in scope", called in the same process (constraint 3), and the dependency stays one way. Constraint 6's build-order list and the Decisions log are left for SET-00, as decision 2 says. C-N8-03 adds one sentence to Export (b): a top-level `.md` in `findings/` without `F-`, or in `field-notes/<name>/` without `NOTE-`, `IR-`, `SU-` or `INJ-`, is left out and named in an amber warning, and the file is still made with the same content (2026-11-11 Chunk N8 review fix 2).
+
+### `tools/README.md` (C-N8-01)
+Status wording only (Chunk N8 CR-3, user D2 A): the tools table, the intro, the notebook heading and its opening line, the compile section's two "planned" lines, the features list's "Still to come"/"Until then" lines, the manual checklist's coverage note and its expected left column (now with Compile), and the Q&A "What's built" (the compile button runs draft mode only; `--final` from the terminal) now say Compile and the combined export are built. No new sections or steps.
+
+**If Operations asks:** "The README no longer calls the Compile button and the combined file future work."
+
+**If Operations asks:** "The spec now says Compile and the combined file are wanted, as the user decided."
 
 Chunk N7 inside `tools/` changed `tools/notebook.py`, `tools/tests/test_notebook.py`, `tools/tests/support.py`, `tools/tests/test_support.py`, this file, `tools/compile-breakdown.md` (its support.py section describes the new hostile-log helper) and `tools/README.md`'s status lines (C-N7-01). Its two related edits outside `tools/` are below. None outside `tools/` in Chunk N6 (it changed only `tools/notebook.py`, `tools/tests/test_notebook.py` and this file), Chunk N5, Chunk N4, Chunk N3, or Chunk N2. (CS-02's `TODO.md` edit and W-01's `agents.md` edit, made on 2026-10-28 before N2 started, were separate tasks and not part of the N2 commit; `agents.md` is ignored by git.)
 

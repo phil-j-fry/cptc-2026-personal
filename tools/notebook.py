@@ -1904,6 +1904,259 @@ def save_export(handler):
     send_json(handler, 200, {"path": str(path), "skipped": skipped})
 
 
+def check_compile_outputs(root, logdir):
+    """Raise RootError if compile's build/ folder or any of its four files may not be written.
+
+    compile.py knows nothing of the log folder: run from the notebook with
+    $LOGDIR set to the working copy or to its build/, it would overwrite
+    logs. So each path compile writes gets the notebook's own write check
+    first, which also refuses incoming/ (Chunk N8 N7-01 review 1).
+    """
+    writable_path(root, logdir, compile.BUILD_FOLDER)
+    for file_name in compile.OUTPUT_FILES:
+        writable_path(root, logdir, Path(compile.BUILD_FOLDER) / file_name)
+
+
+def run_compile(handler):
+    """POST /compile: compile the working copy; answer with the QA report and the screen lines.
+
+    It calls compile.run() in this process (Constraint 3: no subprocess),
+    on the notebook's own root, in draft mode with the default index: what
+    `python3 tools/compile.py --root <root>` does. compile.run() rewrites the
+    four build/ files and never writes report.md; it isn't called if one of
+    them would be in the log folder or incoming/. The request has no fields,
+    so its body is never read; the connection closes after this answer
+    (answer()), so an unread body can't be read as a second request.
+    """
+    settings = handler.server.settings
+    try:
+        check_compile_outputs(settings["root"], settings["logdir"])
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    # Draft mode only, so drafts in progress give warnings, not errors; the
+    # --final pre-submission check stays a terminal command.
+    exit_code, qa_text, lines = compile.run(settings["root"], None, False)
+    if exit_code == 2:
+        # compile couldn't run (e.g. a build/ output is a link, or a finding
+        # isn't UTF-8). Its one line says why and names the path; there is
+        # no QA report to show. A Linux file name with a byte that isn't
+        # UTF-8 would stop send_text() from encoding the line, so such a
+        # character is written as a \u escape instead (Chunk N8 CR-1).
+        text = "\n".join(lines).encode("utf-8", "backslashreplace").decode("utf-8")
+        send_text(handler, 500, text)
+        return
+    send_json(handler, 200, {"exit_code": exit_code, "qa": qa_text, "lines": lines})
+
+
+# Export (b): one Markdown file of the person's findings and notes, for
+# pasting over RDP when no file transfer works. The notes come after the
+# findings in this order of prefixes, each group by filename (OQ-10).
+COMBINED_NOTE_PREFIXES = ["NOTE-", "IR-", "SU-", "INJ-"]
+
+
+def folder_sources(root, folder, prefix):
+    """Return the regular prefix*.md files directly in folder, root-relative, by filename.
+
+    Raises RootError if the folder or a matching file points outside the
+    root, compile.InputError if a matching name isn't UTF-8, and OSError if
+    the folder can't be listed. A link that stays
+    inside the root is followed (OQ-17). A missing folder gives nothing.
+    """
+    resolved = readable_path(root, folder)
+    try:
+        # listdir(), not glob(): glob() treats a folder it may not read as
+        # empty, which would make a combined file with files silently missing.
+        names = os.listdir(str(resolved))
+    except (FileNotFoundError, NotADirectoryError):
+        # No such folder yet (or a file in its place): nothing to combine.
+        return []
+    found = []
+    # Only the folder's own files count, not its subfolders'.
+    for name in names:
+        if not (name.startswith(prefix) and name.endswith(".md")):
+            continue
+        relative = folder + "/" + name
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError:
+            # A name with bytes that aren't UTF-8 (possible on Linux) can't
+            # be written in its heading; stop rather than leave it out.
+            raise compile.InputError("file name isn't UTF-8: " + repr(relative))
+        # is_file() follows the link, so a folder, a FIFO or a dangling link
+        # named like a source is left out, as compile.py leaves it out.
+        if readable_path(root, relative).is_file():
+            found.append(relative)
+    # listdir() lists in whatever order the disk gives.
+    return sorted(found)
+
+
+def combined_sources(root, name):
+    """Return the files the combined export takes, root-relative and in their order.
+
+    The person's own findings/F-*.md first, then field-notes/<name>/'s
+    NOTE-, IR-, SU- and INJ- files. Membership is by the folder a file is
+    in, not where an in-root link points. Raises RootError for a path
+    pointing outside the root, and OSError for a folder that can't be read.
+    """
+    sources = folder_sources(root, "findings", "F-")
+    for prefix in COMBINED_NOTE_PREFIXES:
+        sources += folder_sources(root, "field-notes/" + name, prefix)
+    return sources
+
+
+def left_out_names(root, folder, prefixes):
+    """Return a warning for each .md name directly in folder that starts with none of prefixes.
+
+    Only names are looked at: such a file is never opened, and a link is
+    never followed to see what it points to (so a folder named x.md is
+    named too; it is left out as well). Raises RootError if the folder
+    points outside the root, OSError if it can't be listed; a missing
+    folder gives nothing.
+    """
+    resolved = readable_path(root, folder)
+    try:
+        names = os.listdir(str(resolved))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    warnings = []
+    for name in sorted(names):
+        if not name.endswith(".md") or name.startswith(tuple(prefixes)):
+            continue
+        shown = folder + "/" + name
+        try:
+            shown.encode("utf-8")
+        except UnicodeEncodeError:
+            # A Linux name with a byte that isn't UTF-8: repr() makes it
+            # plain text that can be sent.
+            shown = repr(shown)
+        warnings.append("left out: " + shown + ": name doesn't start with " + " or ".join(prefixes))
+    return warnings
+
+
+def combined_left_out(root, name):
+    """Return the left-out warnings for the combined export's two folders (Chunk N8 review fix 2).
+
+    A finding or note saved under a name without its prefix would otherwise
+    be missing from the combined file with nothing said.
+    """
+    return (left_out_names(root, "findings", ["F-"])
+            + left_out_names(root, "field-notes/" + name, COMBINED_NOTE_PREFIXES))
+
+
+def read_combined_source(root, relative):
+    """Return one source's text, minus a leading BOM, as compile.py reads it.
+
+    Raises RootError if it is no longer a regular file, compile.InputError
+    if it isn't UTF-8 text, and OSError if it can't be read.
+    """
+    # open_regular_file(): a FIFO swapped in since the listing can't make it wait.
+    handle, info = open_regular_file(readable_path(root, relative))
+    with os.fdopen(handle, "rb") as source:
+        data = source.read()
+    try:
+        # utf-8-sig drops a BOM (Windows Notepad), as compile.read_markdown()
+        # does; decoding bytes keeps "\r\n" line endings as they are.
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise compile.InputError(relative + " is not UTF-8 text (" + str(error) + ")")
+
+
+def combined_text(root, sources):
+    """Return the combined Markdown: each source under a heading of its path, separated by ---."""
+    parts = []
+    for relative in sources:
+        text = read_combined_source(root, relative)
+        # Every part ends in a line break, so the --- after it is a line of
+        # its own after a blank line: straight after text, Markdown would
+        # read "---" as underlining that text into a heading.
+        if not text.endswith("\n"):
+            text += "\n"
+        parts.append("# " + relative + "\n\n" + text)
+    return "\n---\n\n".join(parts)
+
+
+def combined_file_name(name, now):
+    """Return the file's name, e.g. cptc-combined-alice-20261107T101500.md."""
+    return "cptc-combined-" + name + "-" + now.strftime("%Y%m%dT%H%M%S") + ".md"
+
+
+def write_combined(root, logdir, name, now=None):
+    """Write the combined Markdown to the root; return (its path, the sources, its text).
+
+    No sources gives an empty file: nothing to combine is not an error.
+    Raises FileExistsError if a file of that name is already there (never
+    overwritten), compile.RootError for a refused path, compile.InputError
+    for a source that isn't UTF-8, and OSError if a read or the write
+    fails. A failure leaves no file.
+    """
+    sources = combined_sources(root, name)
+    # Everything is read before anything is written, so a bad source stops
+    # it before there is a file.
+    text = combined_text(root, sources)
+    data = text.encode("utf-8")
+    file_name = combined_file_name(name, now or datetime.datetime.now())
+    # The same write check as the zip export: not incoming/ or the log folder.
+    writable_path(root, logdir, file_name)
+    # The name itself, not what writable_path() resolved: a link named like
+    # the file must stop it, not send the text where the link points.
+    path = Path(root) / file_name
+    taken = "a combined file named " + file_name + " already exists; try again in a second"
+    if os.path.lexists(str(path)):
+        raise FileExistsError(taken)
+    # A temp file first, then its name, as write_export() does, so a
+    # half-written file never carries the export's name.
+    handle, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".cptc-combined-", suffix=".part")
+    try:
+        with os.fdopen(handle, "wb") as temp:
+            temp.write(data)
+        # os.link(), unlike a rename, never replaces a file that appeared
+        # under that name meanwhile.
+        os.link(temp_name, str(path))
+    except FileExistsError:
+        os.unlink(temp_name)
+        raise FileExistsError(taken)
+    except BaseException:
+        # Our own temp file only.
+        os.unlink(temp_name)
+        raise
+    try:
+        os.unlink(temp_name)
+    except OSError:
+        # The file is whole under its name by now, so this is still a
+        # success; a .part left behind is the Limit of a crash (Chunk N8 CR-2).
+        pass
+    return path, sources, text
+
+
+def save_combined(handler):
+    """POST /combined-export: write the combined Markdown; answer with its path, sources, text and left-out warnings.
+
+    The request has no fields: what goes in is fixed (combined_sources()),
+    so nothing sent can add logs or another folder. Its body is never read;
+    the connection closes after this answer (answer()).
+    """
+    settings = handler.server.settings
+    try:
+        # Listed first, so a folder that can't be listed stops it before
+        # there is a file.
+        left_out = combined_left_out(settings["root"], settings["name"])
+        path, sources, text = write_combined(settings["root"], settings["logdir"], settings["name"])
+    except compile.RootError as error:
+        send_text(handler, 403, "refused: " + str(error))
+        return
+    except FileExistsError as error:
+        # Before OSError, which it is a kind of: the earlier file is kept.
+        send_text(handler, 409, "not exported: " + str(error))
+        return
+    except (compile.InputError, OSError) as error:
+        # A folder or source that can't be read, a source or name that isn't
+        # UTF-8, or a failed write: no file is left.
+        send_text(handler, 500, "not exported: " + str(error))
+        return
+    send_json(handler, 200, {"path": str(path), "sources": sources, "text": text, "left_out": left_out})
+
+
 # Logs: the terminal transcripts in $LOGDIR are cleaned for display only
 # (BUILD-SPEC Logs); the log itself is never changed.
 
@@ -2374,6 +2627,7 @@ mark { background: none; color: inherit; font-weight: bold; }
 <button type="button" id="checklists-button">Checklists</button>
 <button type="button" id="logs-button">Logs</button>
 <button type="button" id="export-button">Export</button>
+<button type="button" id="compile-button">Compile</button>
 </nav>
 <main id="main"></main>
 </div>
@@ -2746,6 +3000,158 @@ function showExport() {
       });
     }).catch(function (error) {
       notMade("Not exported: " + error);
+    });
+  });
+
+  showCombinedExport();
+}
+
+/* The Export view's second part (Export (b)): one Markdown file of the
+   person's findings and notes, for copying over the clipboard when no
+   file transfer works. */
+function showCombinedExport() {
+  main.appendChild(element("h3", "Combined Markdown (fallback)"));
+  main.appendChild(element("p", "Only for when files can't be moved, e.g. over RDP with no file " +
+    "transfer: makes one Markdown file of your findings/ and the NOTE, IR, SU and INJ files in " +
+    "field-notes/<your name>/, saved in your working copy, to copy over the clipboard. " +
+    "Use the zip when you can."));
+  var make = element("button", "Make the combined file");
+  make.type = "button";
+  main.appendChild(element("div")).appendChild(make);
+  var status = main.appendChild(element("div"));
+  status.className = "message";
+  var combined = element("textarea");
+  combined.readOnly = true;
+  combined.rows = 20;
+  combined.hidden = true;
+  main.appendChild(combined);
+  /* Copy (Chunk N8 review D5 B), like the Logs view's: shown only beside
+     the text of the last export that worked. */
+  var copy = element("button", "Copy");
+  copy.type = "button";
+  copy.hidden = true;
+  main.appendChild(element("div")).appendChild(copy);
+  var copied = main.appendChild(element("p", ""));
+  copied.className = "message";
+  copy.addEventListener("click", function () {
+    var cantCopy = "Couldn't copy it: select the text above and copy it by hand.";
+    if (!navigator.clipboard) {
+      markError(copied);
+      copied.textContent = cantCopy;
+      return;
+    }
+    navigator.clipboard.writeText(combined.value).then(function () {
+      markOk(copied);
+      copied.textContent = "Copied.";
+    }, function () {
+      markError(copied);
+      copied.textContent = cantCopy;
+    });
+  });
+
+  make.addEventListener("click", function () {
+    /* Locked until the answer; the last result is cleared first, so an
+       earlier success never shows as this click's. */
+    make.disabled = true;
+    status.textContent = "";
+    combined.hidden = true;
+    combined.value = "";
+    copy.hidden = true;
+    copied.className = "message";
+    copied.textContent = "";
+    function notMade(text) {
+      make.disabled = false;
+      markError(status);
+      status.appendChild(element("p", text));
+    }
+    fetch("/combined-export", {
+      method: "POST",
+      headers: {"X-CPTC-Token": TOKEN}
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(notMade);
+      }
+      return response.json().then(function (result) {
+        make.disabled = false;
+        markOk(status);
+        status.appendChild(element("p", "Saved " + result.path));
+        if (result.sources.length === 0) {
+          /* Made, but empty: amber, not green (LOOK-02). */
+          markWarning(status);
+          status.appendChild(element("p", "Nothing to combine: no findings or notes yet."));
+        }
+        result.sources.forEach(function (source) {
+          status.appendChild(element("p", source));
+        });
+        if (result.left_out.length > 0) {
+          /* Made, but some .md files aren't in it: amber (Chunk N8 review fix 2). */
+          markWarning(status);
+        }
+        result.left_out.forEach(function (line) {
+          status.appendChild(element("p", line));
+        });
+        combined.value = result.text;
+        combined.hidden = false;
+        copy.hidden = false;
+      });
+    }).catch(function (error) {
+      notMade("Not exported: " + error);
+    });
+  });
+}
+
+/* The Compile view (Compile): runs compile.py on the working copy, in
+   draft mode, and shows what it says. */
+function showCompile() {
+  main.textContent = "";
+  main.appendChild(element("h2", "Compile"));
+  main.appendChild(element("p", "Runs compile.py on your working copy in draft mode: it " +
+    "rewrites the four files in build/ and shows the QA report. It never changes report.md. " +
+    "For the pre-submission check, run compile.py with --final in a terminal."));
+  var run = element("button", "Run compile");
+  run.type = "button";
+  main.appendChild(element("div")).appendChild(run);
+  var status = main.appendChild(element("div"));
+  status.className = "message";
+  var report = main.appendChild(element("div"));
+
+  run.addEventListener("click", function () {
+    /* Locked until the answer, so one click runs compile once. */
+    run.disabled = true;
+    status.textContent = "";
+    report.textContent = "";
+    function notRun(text) {
+      run.disabled = false;
+      markError(status);
+      status.appendChild(element("pre", text));
+    }
+    fetch("/compile", {
+      method: "POST",
+      headers: {"X-CPTC-Token": TOKEN}
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(notRun);
+      }
+      return response.json().then(function (result) {
+        run.disabled = false;
+        /* Amber if compile found any problem, as its screen lines say. */
+        var problems = result.lines.some(function (line) {
+          return line.indexOf("WARNING:") === 0 || line.indexOf("ERROR:") === 0;
+        });
+        if (problems) {
+          markWarning(status);
+        } else {
+          markOk(status);
+        }
+        result.lines.forEach(function (line) {
+          status.appendChild(element("pre", line));
+        });
+        report.appendChild(element("h3", "QA report (build/qa-report.txt)"));
+        var text = report.appendChild(element("pre", result.qa));
+        text.className = "log-text";
+      });
+    }).catch(function (error) {
+      notRun("Not compiled: " + error);
     });
   });
 }
@@ -3377,6 +3783,10 @@ document.getElementById("export-button").addEventListener("click", function () {
   goTo(showExport);
 });
 
+document.getElementById("compile-button").addEventListener("click", function () {
+  goTo(showCompile);
+});
+
 loadFiles();
 </script>
 </body>
@@ -3398,7 +3808,9 @@ POST_ROUTES = {"/checklist-state": save_tick,
                "/new-file": save_new_file,
                "/file": save_file,
                "/export": save_export,
-               "/evidence": save_evidence}
+               "/evidence": save_evidence,
+               "/compile": run_compile,
+               "/combined-export": save_combined}
 
 
 class NotebookHandler(BaseHTTPRequestHandler):
