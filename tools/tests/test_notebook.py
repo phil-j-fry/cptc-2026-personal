@@ -4162,18 +4162,20 @@ class AppShellTests(ServerTestCase):
         parts.feed(page)
         return page, parts
 
-    def test_nav_has_the_file_list_new_checklists_logs_and_export(self):
+    def test_nav_has_the_file_list_new_checklists_logs_export_and_compile(self):
         page, parts = self.get_page()
         self.assertEqual(parts.inside["nav"], [("button", "theme-toggle"),
                                                ("div", "file-list"),
                                                ("button", "new-button"),
                                                ("button", "checklists-button"),
                                                ("button", "logs-button"),
-                                               ("button", "export-button")])
+                                               ("button", "export-button"),
+                                               ("button", "compile-button")])
         self.assertEqual(parts.inside["main"], [])
-        # No Compile control yet: the only words on the page are the five
-        # buttons', in the Look and layout order.
-        self.assertEqual(parts.visible_text, ["Light / dark", "New", "Checklists", "Logs", "Export"])
+        # The only words on the page are the six buttons', in the Look and
+        # layout order.
+        self.assertEqual(parts.visible_text, ["Light / dark", "New", "Checklists", "Logs", "Export",
+                                              "Compile"])
         # The file list loads when the page opens.
         self.assertIn("\nloadFiles();\n</script>", page)
 
@@ -4192,10 +4194,10 @@ class AppShellTests(ServerTestCase):
     def test_script_posts_the_token_and_locks_boxes(self):
         # The display-safety asserts are in PageSafetyTests (NT4-06).
         page, _ = self.get_page()
-        # All five POSTs (a tick, a new file, a save of a file, an export,
-        # a log copied into evidence/) send the token.
-        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 5)
-        self.assertEqual(page.count("fetch("), 9)
+        # All seven POSTs (a tick, a new file, a save of a file, an export,
+        # a log copied into evidence/, a compile, a combined export) send the token.
+        self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 7)
+        self.assertEqual(page.count("fetch("), 11)
         self.assertIn('fetch("/new-file", {\n      method: "POST",', page)
         self.assertIn('box.type = "checkbox";', page)
         # A box is locked while its save is pending and, if the save fails,
@@ -4251,7 +4253,7 @@ class PageSafetyTests(ServerTestCase):
     SAFETY_STRINGS = {"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write",
                       "textContent", ".value", "made.textContent = text;",
                       "fileText.value = data.text;", "fileText.value = result.text;",
-                      "kept.value = text;"}
+                      "kept.value = text;", "combined.value = result.text;"}
 
     def test_page_source_is_display_safe(self):
         response, page = self.send_full("GET", "/", self.good_host())
@@ -4273,6 +4275,8 @@ class PageSafetyTests(ServerTestCase):
         # After a Save, the saved text; after a Reload, the kept text.
         self.assertIn("fileText.value = result.text;", page)
         self.assertIn("kept.value = text;", page)
+        # The combined file's text, shown for copying.
+        self.assertIn("combined.value = result.text;", page)
         self.assert_no_other_test_makes_these_asserts()
 
     def assert_no_other_test_makes_these_asserts(self):
@@ -5375,6 +5379,1107 @@ class ExportPageTests(ServerTestCase):
         self.assertIn('notMade("Not exported: " + error);', page)
 
 
+# Findings A, B and C, the index (D), the interaction files (E) and a
+# report.md marker (F) from the 'event-scenario' canvas note's base corpus.
+# All names and addresses are fake.
+EVENT_FILES = {
+    "findings/F-001-ticket-record-access.md": """\
+### F-001: Ticket records accessible across guest accounts
+
+- **Severity:** High
+- **CVSS 3.1:** `CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:L/A:N` (8.1)
+- **Why this severity:** Alice read another fake guest record and changed only its display note.
+- **Affected assets:** web01 (192.0.2.20), https://tickets.example.invalid, alice
+- **Status:** Confirmed
+- **References:** CWE-639, https://example.invalid/standards/access-control
+
+#### Reproduction steps
+Starting position: signed in as alice.
+
+1. Request `GET /tickets/1001` from `https://tickets.example.invalid`.
+   Expected: the response shows the alice sample record.
+2. Change the path to `GET /tickets/1002`.
+   Expected: the response shows the bob sample record.
+""",
+    # One real step plus pasted output that starts with an IP address.
+    "incoming/bob/findings/F-002-smb-signing.md": """\
+### F-002: SMB signing is not required on dc01
+
+- **Severity:** Medium
+- **CVSS 3.1:** `CVSS:3.1/AV:A/AC:H/PR:L/UI:R/S:U/C:H/I:H/A:N` (6.1)
+- **Why this severity:** Bob confirmed relay exposure but did not relay or change a system.
+- **Affected assets:** dc01 (10.0.0.5), smb://dc01.example.invalid, bob
+- **Status:** Confirmed
+- **References:** CWE-345, https://example.invalid/standards/smb-signing
+
+#### Reproduction steps
+Starting position: in-scope internal test box with no privileged session.
+
+1. Run `nxc smb 10.0.0.5 --gen-relay-list relay.txt`.
+   Expected: dc01 is written to the relay target list.
+
+```text
+10.0.0.5 dc01 signing:false
+```
+""",
+    # An honest draft: severity, CVSS and rationale are still markers.
+    "incoming/bob/findings/F-003-ot-dashboard.md": """\
+### F-003: Ride dashboard is reachable from the corporate segment
+
+- **Severity:** [[CHOOSE: Critical / High / Medium / Low / Informational]]
+- **CVSS 3.1:** `[[CVSS_VECTOR]]` ([[CVSS_SCORE]])
+- **Why this severity:** [[SEVERITY_RATIONALE]]
+- **Affected assets:** hmi01 (10.0.0.30), https://hmi01.example.invalid, bob
+- **Status:** Suspected
+- **References:** https://example.invalid/standards/ot-segmentation
+
+#### Reproduction steps
+Starting position: corporate test segment; read-only checks approved.
+
+1. Run `curl -kI https://hmi01.example.invalid`.
+   Expected: a fake dashboard HTTP header is returned.
+""",
+    "tracker/findings-index.csv":
+        "finding_id,title,severity,cvss_score,owner,status,in_report\n"
+        "F-001,Ticket records accessible across guest accounts,High,8.1,alice,done,yes\n"
+        "F-002,SMB signing is not required on dc01,Medium,6.1,bob,review,no\n"
+        "F-003,Ride dashboard is reachable from the corporate segment,, ,bob,drafting,no\n",
+    "field-notes/alice/SU-midpoint.md": "# Client Status Update\n\n- **Time:** 2026-11-07 14:00\n",
+    "incoming/bob/field-notes/bob/IR-001-service-interruption.md":
+        "# Incident Report IR-001\n\n- **Time reported:** 2026-11-07 11:40\n",
+    "incoming/bob/field-notes/bob/INJ-data-handling.md":
+        "# Inject Response: Fake data-handling question\n\n- **Sent:** [[DATE_SENT]] [[TIME_SENT]]\n",
+    # A marker only in report.md: draft mode doesn't read report.md.
+    "report.md": "## 7. Incident and Client Interaction Log\n[[TIMELINE_ROWS]]\n",
+}
+
+# Every WARNING line the event corpus gives in draft mode, in compile's order.
+EVENT_WARNINGS = [
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:3: no severity (Critical, High, "
+    "Medium, Low or Informational); sorted last",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:3: Severity has no value",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:4: CVSS 3.1 has no value",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:5: Why this severity has no value",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:3: leftover marker [[CHOOSE",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:4: leftover marker [[CVSS_VECTOR",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:4: leftover marker [[CVSS_SCORE",
+    "WARNING: incoming/bob/findings/F-003-ot-dashboard.md:5: leftover marker [[SEVERITY_RATIONALE",
+    "WARNING: incoming/bob/field-notes/bob/INJ-data-handling.md:3: Sent is not YYYY-MM-DD "
+    "HH:MM: [[DATE_SENT]] [[TIME_SENT]]; sorted last",
+]
+
+
+class CompileRouteTests(ServerTestCase):
+    """N7-01: POST /compile runs compile.run() in this process (Compile; Constraint 3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.work = support.make_worktree(self, EVENT_FILES)
+        self.server.settings["root"] = self.work.resolve()
+        support.write_fake_file(self.logdir, "alice_20261107T101500Z.log", "fake log\n")
+        # A decoy default working copy in a fake HOME: a compile that used
+        # compile.py's ~/cptc-work default instead of the notebook's root
+        # would write build/ here.
+        self.home = support.make_worktree(self, {"cptc-work/findings/F-009-decoy.md": "decoy\n"})
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.home_before = file_bytes(self.home)
+
+    def post(self, token="default", host=None):
+        """POST /compile with no body; return (status, text, content type)."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/compile", skip_host=True)
+        connection.putheader("Host", host or self.good_host())
+        if token is not None:
+            connection.putheader("X-CPTC-Token", self.server.token if token == "default" else token)
+        connection.putheader("Content-Length", "0")
+        connection.endheaders()
+        response = connection.getresponse()
+        text = response.read().decode("utf-8")
+        self.assert_safe_headers(response)
+        return response.status, text, response.getheader("Content-Type")
+
+    def compile_ok(self):
+        status, text, content_type = self.post()
+        self.assertEqual((status, content_type), (200, "application/json"), text)
+        return json.loads(text)
+
+    def assert_not_compiled(self, text_wanted):
+        status, text, content_type = self.post()
+        self.assertEqual((status, text), (500, text_wanted))
+        self.assertEqual(content_type, "text/plain; charset=utf-8")
+
+    def outputs(self):
+        """The four build/ files' bytes, by name."""
+        return {name: (self.work / "build" / name).read_bytes() for name in compile.OUTPUT_FILES}
+
+    def sources(self):
+        """Every file in the working copy except build/: findings, incoming/, report.md..."""
+        return {path: data for path, data in file_bytes(self.work).items()
+                if not path.startswith("build/")}
+
+    def assert_inputs_unchanged(self, sources):
+        self.assertEqual(self.sources(), sources)
+        self.assertEqual((self.work / "report.md").read_text(encoding="utf-8"), EVENT_FILES["report.md"])
+        self.assertEqual(file_bytes(self.logdir), {"alice_20261107T101500Z.log": b"fake log\n"})
+        self.assertEqual(file_bytes(self.home), self.home_before)
+
+    def test_endpoint_matches_a_direct_run_on_the_same_root(self):
+        # Stale outputs from an earlier run must all be rewritten.
+        for name in compile.OUTPUT_FILES:
+            support.write_fake_file(self.work, "build/" + name, "stale\n")
+        sources = self.sources()
+        with mock.patch.object(compile, "run", wraps=compile.run) as run:
+            result = self.compile_ok()
+        # In this process, on the notebook's root, in draft mode.
+        run.assert_called_once_with(self.work.resolve(), None, False)
+        self.assertEqual(set(result), {"exit_code", "qa", "lines"})
+        endpoint = self.outputs()
+        for name in compile.OUTPUT_FILES:
+            with self.subTest(name=name):
+                self.assertNotEqual(endpoint[name], b"stale\n")
+        self.assertEqual(result["qa"], endpoint["qa-report.txt"].decode("utf-8"))
+        # A direct call on the same root gives the same answer and the same four files.
+        exit_code, qa_text, lines = compile.run(self.work, None, False)
+        self.assertEqual((result["exit_code"], result["qa"], result["lines"]), (exit_code, qa_text, lines))
+        self.assertEqual(self.outputs(), endpoint)
+        self.assert_inputs_unchanged(sources)
+        self.assertFalse((self.home / "cptc-work" / "build").exists())
+
+    def test_event_corpus_gives_its_ready_draft_and_warning_lines(self):
+        sources = self.sources()
+        # No pandoc hint, so the last line is the QA summary.
+        with mock.patch("shutil.which", return_value=None):
+            result = self.compile_ok()
+        build = self.work.resolve() / "build"
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["lines"],
+                         ["WROTE " + str(build / name) for name in compile.OUTPUT_FILES]
+                         + EVENT_WARNINGS
+                         + ["QA: 3 findings; 2 READY; 1 DRAFT; 9 warnings; 0 errors"])
+        for line in ("QA report (draft mode): problems are warnings\n",
+                     "  findings/F-001-ticket-record-access.md: READY\n",
+                     "  incoming/bob/findings/F-002-smb-signing.md: READY\n",
+                     "  incoming/bob/findings/F-003-ot-dashboard.md: DRAFT: 4 unresolved markers, "
+                     "3 missing fields, no severity word\n",
+                     # The IP-first output line is not a second step.
+                     "\nPASS reproduction steps\n"):
+            with self.subTest(line=line):
+                self.assertIn(line, result["qa"])
+        # Draft mode doesn't read report.md, so its marker is not reported.
+        self.assertFalse(any("report.md" in line for line in result["lines"] + result["qa"].split("\n")))
+        self.assert_inputs_unchanged(sources)
+
+    def test_compiling_twice_gives_the_same_answer(self):
+        first = self.compile_ok()
+        outputs = self.outputs()
+        self.assertEqual(self.compile_ok(), first)
+        self.assertEqual(self.outputs(), outputs)
+
+    def test_missing_index_and_report_still_compile(self):
+        # As compile.run() does: a missing index is a warning; draft mode
+        # never looks for report.md.
+        self.work = support.make_worktree(self, {
+            "findings/F-001-ticket-record-access.md": EVENT_FILES["findings/F-001-ticket-record-access.md"]})
+        self.server.settings["root"] = self.work.resolve()
+        result = self.compile_ok()
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("WARNING: tracker/findings-index.csv: findings index not found; "
+                      "ID comparison skipped", result["lines"])
+        self.assertIn("  findings/F-001-ticket-record-access.md: READY\n", result["qa"])
+        self.assertFalse((self.work / "report.md").exists())
+
+    def test_a_git_root_is_refused_and_nothing_is_written(self):
+        # The working copy turned into a clone after the notebook started.
+        (self.work / ".git").mkdir()
+        sources = self.sources()
+        self.assert_not_compiled("compile failed: this looks like the git clone ("
+                                 + str(self.work.resolve()) + " has .git); "
+                                 "run on the working copy, e.g. ~/cptc-work")
+        self.assertFalse((self.work / "build").exists())
+        self.assertEqual(self.sources(), sources)
+
+    def refused_output(self, text_wanted, alias_bytes):
+        """Compile must be refused with text_wanted; nothing in build/ or report.md changes."""
+        before = file_bytes(self.work)
+        self.assert_not_compiled(text_wanted)
+        self.assertEqual(file_bytes(self.work), before)
+        self.assertEqual((self.work / "report.md").read_bytes(), alias_bytes)
+
+    def test_a_linked_build_folder_is_refused(self):
+        (self.work / "elsewhere").mkdir()
+        (self.work / "build").symlink_to(self.work / "elsewhere")
+        self.refused_output("compile failed: build output is a link; remove it: build",
+                            EVENT_FILES["report.md"].encode("utf-8"))
+        self.assertEqual(list((self.work / "elsewhere").iterdir()), [])
+
+    def test_an_output_linked_to_report_md_is_refused(self):
+        self.compile_ok()
+        qa_report = self.work / "build" / "qa-report.txt"
+        qa_report.unlink()
+        qa_report.symlink_to(self.work / "report.md")
+        self.refused_output("compile failed: build output is a link; remove it: build/qa-report.txt",
+                            EVENT_FILES["report.md"].encode("utf-8"))
+
+    def test_an_output_hard_linked_to_report_md_is_refused(self):
+        self.compile_ok()
+        summary = self.work / "build" / "findings-summary.md"
+        summary.unlink()
+        os.link(str(self.work / "report.md"), str(summary))
+        self.refused_output("compile failed: build output has another hard link; remove it: "
+                            "build/findings-summary.md", EVENT_FILES["report.md"].encode("utf-8"))
+
+    def test_an_output_that_is_a_folder_is_refused(self):
+        self.compile_ok()
+        combined = self.work / "build" / "findings-combined.md"
+        combined.unlink()
+        combined.mkdir()
+        self.refused_output("compile failed: build output is not a file; remove it: "
+                            "build/findings-combined.md", EVENT_FILES["report.md"].encode("utf-8"))
+
+    def test_a_finding_that_is_not_utf8_is_refused_with_its_path(self):
+        self.compile_ok()
+        outputs = self.outputs()
+        # cp1252 text, as an older Windows editor saves it.
+        path = self.work / "findings" / "F-004-cafe.md"
+        path.write_bytes("### F-004: Café kiosk\n".encode("cp1252"))
+        status, text, content_type = self.post()
+        self.assertEqual((status, content_type), (500, "text/plain; charset=utf-8"))
+        self.assertTrue(text.startswith("compile failed: " + str(path.resolve()) + " is not UTF-8 text ("), text)
+        self.assertEqual(self.outputs(), outputs)
+        self.assertEqual(path.read_bytes(), "### F-004: Café kiosk\n".encode("cp1252"))
+
+    def test_a_failure_naming_a_non_utf8_file_is_still_answered(self):
+        # Chunk N8 CR-1: Linux allows such a name, and compile's line names it
+        # as listdir() gives it, with a stand-in for the bad byte.
+        failure = (2, "", ["compile failed: findings/F-003-\udcff.md is not UTF-8 text (x)"])
+        with mock.patch.object(compile, "run", return_value=failure):
+            self.assert_not_compiled("compile failed: findings/F-003-\\udcff.md is not UTF-8 text (x)")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a file with no permissions")
+    def test_an_unreadable_finding_is_refused_with_its_path(self):
+        path = self.work / "findings" / "F-001-ticket-record-access.md"
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o644)
+        status, text, content_type = self.post()
+        self.assertEqual(status, 500)
+        self.assertTrue(text.startswith("compile failed: [Errno 13] Permission denied: "), text)
+        self.assertIn(str(path.resolve()), text)
+
+    def test_a_refused_compile_then_a_good_one(self):
+        (self.work / "build").mkdir()
+        (self.work / "build" / "qa-report.txt").symlink_to(self.work / "report.md")
+        self.assertEqual(self.post()[0], 500)
+        (self.work / "build" / "qa-report.txt").unlink()
+        self.assertEqual(self.compile_ok()["exit_code"], 0)
+        self.assertEqual((self.work / "report.md").read_text(encoding="utf-8"), EVENT_FILES["report.md"])
+
+    def assert_refused_by_the_notebook(self, text_wanted):
+        """A 403 before compile.run() is called; nothing in the working copy or log folder changes."""
+        before = file_bytes(self.work)
+        logs_before = file_bytes(self.server.settings["logdir"])
+        with mock.patch.object(compile, "run") as run:
+            status, text, content_type = self.post()
+        self.assertEqual((status, text), (403, text_wanted))
+        self.assertEqual(content_type, "text/plain; charset=utf-8")
+        run.assert_not_called()
+        self.assertEqual(file_bytes(self.work), before)
+        self.assertEqual(file_bytes(self.server.settings["logdir"]), logs_before)
+
+    def seed_log_in_build(self):
+        """A fake log where compile would write qa-report.txt."""
+        support.write_fake_file(self.work, "build/qa-report.txt", "preserve this fake log\n")
+
+    def test_a_log_folder_that_is_build_is_refused(self):
+        self.seed_log_in_build()
+        self.server.settings["logdir"] = (self.work / "build").resolve()
+        self.assert_refused_by_the_notebook("refused: the log folder is read-only, not writing: build")
+
+    def test_a_log_folder_that_is_the_root_is_refused(self):
+        self.seed_log_in_build()
+        self.server.settings["logdir"] = self.work.resolve()
+        self.assert_refused_by_the_notebook("refused: the log folder is read-only, not writing: build")
+
+    def test_a_log_folder_linked_to_build_from_outside_is_refused(self):
+        self.seed_log_in_build()
+        outside = support.make_worktree(self)
+        (outside / "logdir").symlink_to(self.work / "build")
+        # Unresolved, so only writable_path()'s own resolve() can see where it points.
+        self.server.settings["logdir"] = outside / "logdir"
+        self.assert_refused_by_the_notebook("refused: the log folder is read-only, not writing: build")
+
+    def test_every_output_is_checked_before_compile_runs(self):
+        # Only the last output is in the log folder (a folder named like it),
+        # so the three before it must not be written either.
+        for name in compile.OUTPUT_FILES[:-1]:
+            support.write_fake_file(self.work, "build/" + name, "stale\n")
+        (self.work / "build" / "qa-report.txt").mkdir()
+        self.server.settings["logdir"] = (self.work / "build" / "qa-report.txt").resolve()
+        self.assert_refused_by_the_notebook(
+            "refused: the log folder is read-only, not writing: build/qa-report.txt")
+
+    def test_build_inside_incoming_is_refused(self):
+        # incoming/ is a link to build/, so writing build/ would write incoming/.
+        self.work = support.make_worktree(self, {
+            "findings/F-001-ticket-record-access.md": EVENT_FILES["findings/F-001-ticket-record-access.md"],
+            "build/qa-report.txt": "old report\n"})
+        (self.work / "incoming").symlink_to(self.work / "build")
+        self.server.settings["root"] = self.work.resolve()
+        self.assert_refused_by_the_notebook("refused: incoming/ is read-only, not writing: build")
+
+    def test_a_log_folder_elsewhere_in_the_root_is_allowed(self):
+        support.write_fake_file(self.work, "logs/alice.log", "fake log\n")
+        self.server.settings["logdir"] = (self.work / "logs").resolve()
+        self.assertEqual(self.compile_ok()["exit_code"], 0)
+        self.assertEqual((self.work / "logs" / "alice.log").read_bytes(), b"fake log\n")
+        self.assertTrue((self.work / "build" / "qa-report.txt").is_file())
+
+    def test_no_or_wrong_token_or_host_compiles_nothing(self):
+        refused = "refused: use http://127.0.0.1:" + str(self.port)
+        for options in [{"token": None}, {"token": "wrong"}, {"host": "evil.example:80"}]:
+            with self.subTest(options=options), mock.patch.object(compile, "run") as run:
+                status, text, content_type = self.post(**options)
+                self.assertEqual((status, text), (403, refused))
+                run.assert_not_called()
+        self.assertFalse((self.work / "build").exists())
+
+    def test_get_compile_is_not_a_route(self):
+        status, text = self.send("GET", "/compile", self.good_host())
+        self.assertEqual(status, 404)
+        self.assertFalse((self.work / "build").exists())
+
+
+class CompilePageTests(ServerTestCase):
+    """N7-01: the page's Compile view. Display safety is PageSafetyTests' (NT4-06)."""
+
+    def get_page(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        return page
+
+    def test_compile_button_opens_the_compile_view(self):
+        page = self.get_page()
+        # Through goTo(), so a dirty fill-in view's leave checks run first.
+        self.assertIn('document.getElementById("compile-button").addEventListener("click", function () {\n'
+                      "  goTo(showCompile);\n});", page)
+        self.assertEqual(page.count("compile-button"), 2)
+
+    def test_the_request_is_a_post_with_the_token_and_no_fields(self):
+        page = self.get_page()
+        self.assertIn('fetch("/compile", {\n      method: "POST",\n'
+                      '      headers: {"X-CPTC-Token": TOKEN}\n    })', page)
+
+    def test_the_screen_lines_and_the_qa_report_show(self):
+        page = self.get_page()
+        self.assertIn("result.lines.forEach(function (line) {\n"
+                      '          status.appendChild(element("pre", line));', page)
+        self.assertIn('report.appendChild(element("h3", "QA report (build/qa-report.txt)"));\n'
+                      '        var text = report.appendChild(element("pre", result.qa));', page)
+        # Amber when compile found a problem, green when it found none.
+        self.assertIn('return line.indexOf("WARNING:") === 0 || line.indexOf("ERROR:") === 0;', page)
+        self.assertIn("if (problems) {\n          markWarning(status);\n        } else {\n"
+                      "          markOk(status);\n        }", page)
+
+    def test_a_failure_shows_its_text_and_unlocks_the_button(self):
+        page = self.get_page()
+        self.assertIn("run.disabled = true;", page)
+        self.assertIn("function notRun(text) {\n      run.disabled = false;\n"
+                      "      markError(status);\n"
+                      '      status.appendChild(element("pre", text));', page)
+        self.assertIn("return response.text().then(notRun);", page)
+        self.assertIn('notRun("Not compiled: " + error);', page)
+
+
+COMBINED_NAME_RE = re.compile(r"^cptc-combined-alice-\d{8}T\d{6}\.md$")
+COMBINED_NOW = datetime.datetime(2026, 11, 7, 10, 15, 0)
+COMBINED_FILE = "cptc-combined-alice-20261107T101500.md"
+
+
+class CombinedExportTests(unittest.TestCase):
+    """N8-01: the combined Markdown file (Export (b); OQ-10, OQ-18)."""
+
+    def setUp(self):
+        self.root = support.make_worktree(self)
+        self.logdir = support.make_worktree(self)
+
+    def write(self, relative_path, text):
+        support.write_fake_file(self.root, relative_path, text)
+
+    def combine(self):
+        """Run write_combined() at COMBINED_NOW; return (path, sources)."""
+        path, sources, text = notebook.write_combined(self.root, self.logdir, "alice", COMBINED_NOW)
+        # The text it returns is exactly what it saved.
+        self.assertEqual(text.encode("utf-8"), path.read_bytes())
+        return path, sources
+
+    def made(self):
+        """Every combined file or temp file in the root, by name."""
+        return sorted(path.name for path in self.root.iterdir() if "cptc-combined" in path.name)
+
+    def assert_nothing_made(self, before):
+        self.assertEqual(self.made(), [])
+        self.assertEqual(file_bytes(self.root), before)
+
+    def test_name_order_headings_and_separators(self):
+        # Written in the wrong order on purpose: creation order, IDs and
+        # severities must not decide where a file goes.
+        files = {
+            "field-notes/alice/SU-midpoint.md": "# Client Status Update\n",
+            "field-notes/alice/INJ-data-handling.md": "# Inject Response\n",
+            "field-notes/alice/IR-002-second.md": "# Incident Report IR-002\n",
+            "field-notes/alice/IR-001-first.md": "# Incident Report IR-001\n",
+            "field-notes/alice/NOTE-web01.md": "# web01 notes\n",
+            "field-notes/alice/NOTE-dc01.md": "# dc01 notes\n",
+            "findings/F-002-low-thing.md": "### F-002: Low thing\n\n- **Severity:** Low\n",
+            "findings/F-001-high-thing.md": "### F-001: High thing\n\n- **Severity:** High\n",
+        }
+        for relative_path, text in files.items():
+            self.write(relative_path, text)
+        before = file_bytes(self.root)
+        real_listdir = os.listdir
+        # The Mac's disk lists names in order; reversed proves the code sorts.
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: sorted(real_listdir(folder), reverse=True)):
+            path, sources = self.combine()
+        order = ["findings/F-001-high-thing.md", "findings/F-002-low-thing.md",
+                 "field-notes/alice/NOTE-dc01.md", "field-notes/alice/NOTE-web01.md",
+                 "field-notes/alice/IR-001-first.md", "field-notes/alice/IR-002-second.md",
+                 "field-notes/alice/SU-midpoint.md", "field-notes/alice/INJ-data-handling.md"]
+        self.assertEqual(sources, order)
+        self.assertEqual(path, self.root / COMBINED_FILE)
+        self.assertTrue(COMBINED_NAME_RE.fullmatch(path.name), path.name)
+        # Inside the root, beside report.md, not in a subfolder.
+        self.assertEqual(path.parent.resolve(), self.root.resolve())
+        self.assertEqual(path.read_text(encoding="utf-8"), "\n---\n\n".join(
+            "# " + relative + "\n\n" + files[relative] for relative in order))
+        # Every source is unchanged; the one new file is the export.
+        after = file_bytes(self.root)
+        self.assertEqual(set(after) - set(before), {COMBINED_FILE})
+        for relative_path, data in before.items():
+            with self.subTest(path=relative_path):
+                self.assertEqual(after[relative_path], data)
+
+    def test_the_time_is_in_the_name(self):
+        self.assertEqual(notebook.combined_file_name("alice-b", datetime.datetime(2026, 1, 2, 3, 4, 5)),
+                         "cptc-combined-alice-b-20260102T030405.md")
+
+    def test_only_own_findings_and_own_notes_are_taken(self):
+        own = {"findings/F-001-a.md": "one\n", "field-notes/alice/NOTE-a.md": "note\n"}
+        others = {
+            # Teammates' copies and other people's notes.
+            "incoming/bob/findings/F-003-b.md": "bob finding\n",
+            "incoming/bob/field-notes/bob/NOTE-b.md": "bob note\n",
+            "field-notes/bob/NOTE-bob.md": "bob's own note\n",
+            # Other folders and root files.
+            "evidence/NOTE-evidence.md": "evidence\n",
+            "tracker/findings-index.csv": "finding_id\n",
+            "notes/NOTE-study.md": "study\n",
+            "templates/finding.md": "template\n",
+            "report.md": "report\n",
+            "build/findings-combined.md": "compile's combined file\n",
+            "cptc-combined-alice-20261106T090000.md": "an earlier combined file\n",
+            "cptc-export-alice-20261106T090000.zip": "an earlier zip\n",
+            # Not a finding or note name, not .md, or one folder too deep.
+            "findings/README.md": "readme\n",
+            "findings/F-004-a.txt": "text file\n",
+            "findings/sub/F-005-deep.md": "deep\n",
+            "field-notes/alice/sub/NOTE-deep.md": "deep note\n",
+            "field-notes/alice/scratch.md": "scratch\n",
+            "field-notes/alice/checklist-state.json": "{}\n",
+        }
+        for relative_path, text in list(own.items()) + list(others.items()):
+            self.write(relative_path, text)
+        path, sources = self.combine()
+        self.assertEqual(sources, ["findings/F-001-a.md", "field-notes/alice/NOTE-a.md"])
+        text = path.read_text(encoding="utf-8")
+        for relative_path, other in others.items():
+            with self.subTest(path=relative_path):
+                self.assertNotIn(other, text)
+
+    def test_no_sources_gives_an_empty_file(self):
+        # No findings/ or field-notes/ at all: nothing to combine is not an error.
+        path, sources = self.combine()
+        self.assertEqual(sources, [])
+        self.assertEqual(path.read_bytes(), b"")
+
+    def test_content_comes_through_as_text(self):
+        hostile = ("### F-001: Odd `text` | pipes $HOME [[HOST]] café – \U0001F600\n\n"
+                   "[[NOTE: keep this note]]\n\n```sh\nif [[ -f x ]]; then echo $1; fi\n```\n\n"
+                   "<script>alert(1)</script>\n## A heading inside\n---\nno final newline")
+        self.write("findings/F-001-odd.md", hostile)
+        path, sources = self.combine()
+        # Markers, notes, fences, HTML and Unicode are kept as text; only a
+        # missing final line break is added, so --- stays its own line.
+        self.assertEqual(path.read_text(encoding="utf-8"), "# findings/F-001-odd.md\n\n" + hostile + "\n")
+
+    def test_crlf_is_kept_and_a_bom_is_dropped(self):
+        crlf = b"# web01 notes\r\n\r\nport 80 open\r\n"
+        bom = b"\xef\xbb\xbf# Client Status Update\n"
+        support.write_fake_file(self.root, "field-notes/alice/NOTE-web01.md", "")
+        (self.root / "field-notes" / "alice" / "NOTE-web01.md").write_bytes(crlf)
+        (self.root / "field-notes" / "alice" / "SU-midpoint.md").write_bytes(bom)
+        path, sources = self.combine()
+        # The source's own line endings stay; the tool's own lines use \n.
+        self.assertEqual(path.read_bytes(),
+                         b"# field-notes/alice/NOTE-web01.md\n\n" + crlf
+                         + b"\n---\n\n# field-notes/alice/SU-midpoint.md\n\n# Client Status Update\n")
+        self.assertEqual((self.root / "field-notes" / "alice" / "SU-midpoint.md").read_bytes(), bom)
+
+    def test_a_source_that_is_not_utf8_stops_it_with_its_path(self):
+        self.write("findings/F-001-a.md", "fine\n")
+        (self.root / "findings" / "F-002-cafe.md").write_bytes("Café\n".encode("cp1252"))
+        before = file_bytes(self.root)
+        with self.assertRaises(compile.InputError) as raised:
+            self.combine()
+        self.assertTrue(str(raised.exception).startswith("findings/F-002-cafe.md is not UTF-8 text ("),
+                        str(raised.exception))
+        self.assert_nothing_made(before)
+
+    def test_a_source_name_that_is_not_utf8_stops_it(self):
+        # Linux allows such a name (the Mac's disk doesn't), and listdir()
+        # gives it with a stand-in for the bad byte, as here.
+        self.write("findings/F-001-a.md", "fine\n")
+        real_listdir = os.listdir
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: real_listdir(folder) + ["F-003-\udcff.md"]):
+            with self.assertRaises(compile.InputError) as raised:
+                self.combine()
+        self.assertEqual(str(raised.exception), "file name isn't UTF-8: 'findings/F-003-\\udcff.md'")
+        self.assertEqual(self.made(), [])
+
+    def test_a_non_utf8_name_that_is_no_source_is_ignored(self):
+        self.write("findings/F-001-a.md", "fine\n")
+        real_listdir = os.listdir
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: real_listdir(folder) + ["scratch-\udcff.md"]):
+            self.assertEqual(self.combine()[1], ["findings/F-001-a.md"])
+
+    def left_out(self):
+        return notebook.combined_left_out(self.root, "alice")
+
+    def test_left_out_names_each_wrong_named_md_file_once_in_order(self):
+        for relative_path in ["findings/zz.md", "findings/aa.md", "findings/f-005-lowercase.md",
+                              "findings/F-001-a.md", "field-notes/alice/scratch.md",
+                              "field-notes/alice/NOTE-a.md", "field-notes/alice/IR-001-b.md",
+                              "field-notes/alice/SU-c.md", "field-notes/alice/INJ-d.md"]:
+            self.write(relative_path, "x\n")
+        real_listdir = os.listdir
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: sorted(real_listdir(folder), reverse=True)):
+            warnings = self.left_out()
+        self.assertEqual(warnings, [
+            "left out: findings/aa.md: name doesn't start with F-",
+            "left out: findings/f-005-lowercase.md: name doesn't start with F-",
+            "left out: findings/zz.md: name doesn't start with F-",
+            "left out: field-notes/alice/scratch.md: name doesn't start with NOTE- or IR- or SU- or INJ-"])
+
+    def test_left_out_looks_only_at_md_names_in_the_two_folders(self):
+        for relative_path in ["findings/notes.txt", "findings/sub/deep.md", "field-notes/alice/sub/deep.md",
+                              "field-notes/bob/other.md", "incoming/bob/findings/other.md", "other.md",
+                              "build/other.md", "evidence/other.md", "notes/other.md"]:
+            self.write(relative_path, "x\n")
+        self.assertEqual(self.left_out(), [])
+        # Missing folders give nothing too.
+        self.assertEqual(notebook.combined_left_out(support.make_worktree(self), "alice"), [])
+
+    def test_left_out_never_opens_or_follows_what_it_names(self):
+        outside = support.make_worktree(self, {"secret.md": "outside\n"})
+        (self.root / "findings").mkdir()
+        (self.root / "findings" / "linked.md").symlink_to(outside / "secret.md")
+        (self.root / "findings" / "gone.md").symlink_to(self.root / "missing.md")
+        os.mkfifo(str(self.root / "findings" / "fifo.md"))
+        (self.root / "findings" / "folder.md").mkdir()
+        self.write("findings/bad.md", "")
+        (self.root / "findings" / "bad.md").write_bytes(b"\xff\n")
+        with mock.patch.object(notebook, "open_regular_file") as opened:
+            warnings = self.left_out()
+            opened.assert_not_called()
+        self.assertEqual(warnings, ["left out: findings/" + name + ": name doesn't start with F-"
+                                    for name in ["bad.md", "fifo.md", "folder.md", "gone.md", "linked.md"]])
+        # And the export still works: none of them is a source.
+        path, sources = self.combine()
+        self.assertEqual(sources, [])
+
+    def test_a_non_utf8_left_out_name_is_shown_as_text(self):
+        real_listdir = os.listdir
+        (self.root / "findings").mkdir()
+        with mock.patch.object(notebook.os, "listdir", lambda folder: real_listdir(folder) + ["x-\udcff.md"]):
+            warnings = notebook.left_out_names(self.root, "findings", ["F-"])
+        self.assertEqual(warnings, ["left out: 'findings/x-\\udcff.md': name doesn't start with F-"])
+        json.dumps(warnings).encode("ascii")
+
+    def test_left_out_refuses_a_folder_linked_outside(self):
+        outside = support.make_worktree(self, {"other.md": "outside\n"})
+        (self.root / "findings").symlink_to(outside)
+        with self.assertRaises(compile.RootError):
+            self.left_out()
+
+    def assert_refused(self, wanted_path):
+        before = file_bytes(self.root)
+        with self.assertRaises(compile.RootError) as raised:
+            self.combine()
+        self.assertIn(wanted_path, str(raised.exception))
+        self.assert_nothing_made(before)
+
+    def test_a_findings_folder_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"F-001-secret.md": "outside\n"})
+        (self.root / "findings").symlink_to(outside)
+        self.assert_refused("findings")
+
+    def test_a_field_notes_folder_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"alice/NOTE-secret.md": "outside\n"})
+        (self.root / "field-notes").symlink_to(outside)
+        self.assert_refused("field-notes/alice")
+
+    def test_a_persons_notes_folder_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"NOTE-secret.md": "outside\n"})
+        (self.root / "field-notes").mkdir()
+        (self.root / "field-notes" / "alice").symlink_to(outside)
+        self.assert_refused("field-notes/alice")
+
+    def test_a_source_linked_outside_is_refused(self):
+        outside = support.make_worktree(self, {"secret.md": "outside\n"})
+        self.write("findings/F-001-a.md", "fine\n")
+        (self.root / "findings" / "F-002-link.md").symlink_to(outside / "secret.md")
+        self.assert_refused("findings/F-002-link.md")
+
+    def test_a_source_linked_outside_to_nothing_is_refused_not_left_out(self):
+        # The listing checks where it points before is_file() looks there:
+        # an outside link is refused even when its target isn't a file.
+        outside = support.make_worktree(self)
+        (self.root / "findings").mkdir()
+        (self.root / "findings" / "F-002-link.md").symlink_to(outside / "not-there.md")
+        self.assert_refused("findings/F-002-link.md")
+
+    def test_an_in_root_link_is_taken_by_its_folder(self):
+        # Allowed (OQ-17); it counts as the folder it sits in, wherever it
+        # points inside the root (a Limit).
+        self.write("incoming/bob/findings/F-002-b.md", "bob's finding\n")
+        (self.root / "findings").mkdir()
+        (self.root / "findings" / "F-002-b.md").symlink_to(self.root / "incoming" / "bob" / "findings" / "F-002-b.md")
+        path, sources = self.combine()
+        self.assertEqual(sources, ["findings/F-002-b.md"])
+        self.assertEqual(path.read_text(encoding="utf-8"), "# findings/F-002-b.md\n\nbob's finding\n")
+
+    def test_dangling_links_folders_and_fifos_are_left_out(self):
+        self.write("findings/F-001-a.md", "fine\n")
+        (self.root / "findings" / "F-002-gone.md").symlink_to(self.root / "findings" / "missing.md")
+        (self.root / "findings" / "F-003-folder.md").mkdir()
+        os.mkfifo(str(self.root / "findings" / "F-004-fifo.md"))
+        path, sources = self.combine()
+        self.assertEqual(sources, ["findings/F-001-a.md"])
+
+    def test_a_fifo_swapped_in_after_the_listing_is_not_read(self):
+        os.mkfifo(str(self.root / "F-001-fifo.md"))
+        # It would block forever if opened for a plain read.
+        with self.assertRaises(compile.RootError) as raised:
+            notebook.read_combined_source(self.root, "F-001-fifo.md")
+        self.assertIn("not a regular file: ", str(raised.exception))
+
+    def assert_unreadable_folder_stops_it(self, folder):
+        """With folder (under the root) unreadable, nothing is made and no source changes."""
+        self.write("findings/F-001-a.md", "one\n")
+        self.write("field-notes/alice/NOTE-a.md", "note\n")
+        before = file_bytes(self.root)
+        locked = self.root / folder
+        locked.chmod(0)
+        # Cleanups run last-in first-out: permissions come back before the
+        # worktree is removed.
+        self.addCleanup(locked.chmod, 0o755)
+        with self.assertRaises(PermissionError):
+            self.combine()
+        locked.chmod(0o755)
+        self.assert_nothing_made(before)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_an_unreadable_findings_folder_stops_it(self):
+        self.assert_unreadable_folder_stops_it("findings")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_an_unreadable_field_notes_folder_stops_it(self):
+        self.assert_unreadable_folder_stops_it("field-notes")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_an_unreadable_notes_folder_stops_it(self):
+        self.assert_unreadable_folder_stops_it("field-notes/alice")
+
+    def test_a_file_in_place_of_a_folder_gives_nothing(self):
+        self.write("findings", "not a folder\n")
+        self.write("field-notes/alice/NOTE-a.md", "note\n")
+        self.assertEqual(self.combine()[1], ["field-notes/alice/NOTE-a.md"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a file with no permissions")
+    def test_an_unreadable_source_stops_it(self):
+        self.write("findings/F-001-a.md", "fine\n")
+        path = self.root / "findings" / "F-001-a.md"
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o644)
+        with self.assertRaises(PermissionError):
+            self.combine()
+        self.assertEqual(self.made(), [])
+
+    def assert_taken(self, before):
+        with self.assertRaises(FileExistsError) as raised:
+            self.combine()
+        self.assertEqual(str(raised.exception), "a combined file named " + COMBINED_FILE
+                         + " already exists; try again in a second")
+        self.assertEqual(file_bytes(self.root), before)
+
+    def test_an_existing_file_of_that_name_is_kept(self):
+        self.write(COMBINED_FILE, "the first one\n")
+        self.assert_taken(file_bytes(self.root))
+
+    def test_a_link_of_that_name_to_report_md_is_kept(self):
+        self.write("report.md", "report\n")
+        (self.root / COMBINED_FILE).symlink_to(self.root / "report.md")
+        self.assert_taken(file_bytes(self.root))
+        self.assertTrue((self.root / COMBINED_FILE).is_symlink())
+
+    def test_a_hard_link_of_that_name_to_report_md_is_kept(self):
+        self.write("report.md", "report\n")
+        os.link(str(self.root / "report.md"), str(self.root / COMBINED_FILE))
+        self.assert_taken(file_bytes(self.root))
+
+    def test_a_folder_of_that_name_is_kept(self):
+        (self.root / COMBINED_FILE).mkdir()
+        before = file_bytes(self.root)
+        self.assert_taken(before)
+        self.assertTrue((self.root / COMBINED_FILE).is_dir())
+
+    def test_a_dangling_link_of_that_name_is_not_followed(self):
+        # A link to a file that doesn't exist yet must not be written through.
+        (self.root / COMBINED_FILE).symlink_to(self.root / "made-through-the-link.md")
+        self.assert_taken(file_bytes(self.root))
+        self.assertFalse((self.root / "made-through-the-link.md").exists())
+
+    def test_a_link_of_that_name_pointing_outside_is_refused(self):
+        outside = support.make_worktree(self, {"target.md": "outside\n"})
+        (self.root / COMBINED_FILE).symlink_to(outside / "target.md")
+        before = file_bytes(self.root)
+        with self.assertRaises(compile.RootError):
+            self.combine()
+        self.assertEqual(file_bytes(self.root), before)
+        self.assertEqual((outside / "target.md").read_text(encoding="utf-8"), "outside\n")
+
+    def test_a_log_folder_that_is_the_root_is_refused(self):
+        self.write("findings/F-001-a.md", "fine\n")
+        self.logdir = self.root
+        before = file_bytes(self.root)
+        with self.assertRaises(compile.RootError) as raised:
+            self.combine()
+        self.assertEqual(str(raised.exception), "the log folder is read-only, not writing: " + COMBINED_FILE)
+        self.assert_nothing_made(before)
+
+    def test_a_later_read_failure_leaves_no_file(self):
+        self.write("findings/F-001-a.md", "one\n")
+        self.write("findings/F-002-b.md", "two\n")
+        before = file_bytes(self.root)
+        real_read = notebook.read_combined_source
+
+        def fail_second(root, relative):
+            if relative == "findings/F-002-b.md":
+                raise OSError("disk read error")
+            return real_read(root, relative)
+
+        with mock.patch.object(notebook, "read_combined_source", fail_second):
+            with self.assertRaises(OSError):
+                self.combine()
+        self.assert_nothing_made(before)
+
+    def test_a_write_failure_leaves_no_file_or_temp_file(self):
+        self.write("findings/F-001-a.md", "one\n")
+        before = file_bytes(self.root)
+        with mock.patch.object(notebook.os, "link", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.combine()
+        self.assert_nothing_made(before)
+
+    def test_a_temp_name_that_cant_be_removed_is_still_a_success(self):
+        # Chunk N8 CR-2: the file already has its name, so it is whole.
+        self.write("findings/F-001-a.md", "one\n")
+        with mock.patch.object(notebook.os, "unlink", side_effect=OSError("busy")):
+            path, sources = self.combine()
+        self.assertEqual(path.read_text(encoding="utf-8"), "# findings/F-001-a.md\n\none\n")
+        leftovers = [name for name in self.made() if name.endswith(".part")]
+        self.assertEqual(len(leftovers), 1)
+        # A crash's leftover, as the Limit says; this test removes its own.
+        (self.root / leftovers[0]).unlink()
+
+    def test_a_file_appearing_meanwhile_is_kept(self):
+        # Made between the name check and the link: os.link() refuses it.
+        self.write("findings/F-001-a.md", "one\n")
+        real_link = os.link
+
+        def someone_else_first(source, target):
+            Path(target).write_text("someone else's\n", encoding="utf-8")
+            return real_link(source, target)
+
+        with mock.patch.object(notebook.os, "link", someone_else_first):
+            with self.assertRaises(FileExistsError):
+                self.combine()
+        self.assertEqual(self.made(), [COMBINED_FILE])
+        self.assertEqual((self.root / COMBINED_FILE).read_text(encoding="utf-8"), "someone else's\n")
+
+
+class CombinedRouteTests(ServerTestCase):
+    """N8-02: POST /combined-export (Export (b); Constraints 4, 8, 9)."""
+
+    def setUp(self):
+        super().setUp()
+        self.work = support.make_worktree(self, {
+            "findings/F-001-a.md": "### F-001: A\n",
+            "field-notes/alice/NOTE-web01.md": "# web01 <script>alert(1)</script>\n",
+            "incoming/bob/findings/F-002-b.md": "bob's finding\n",
+            "report.md": "# Report\n[[EXEC_SUMMARY]]\n",
+        })
+        self.server.settings["root"] = self.work.resolve()
+        support.write_fake_file(self.logdir, "alice_20261107T101500Z.log", "fake log\n")
+        self.work_before = file_bytes(self.work)
+        self.logs_before = file_bytes(self.logdir)
+
+    def post(self, body=b"", token="default", host=None):
+        """POST /combined-export; return (status, text, content type)."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        self.addCleanup(connection.close)
+        connection.putrequest("POST", "/combined-export", skip_host=True)
+        connection.putheader("Host", host or self.good_host())
+        if token is not None:
+            connection.putheader("X-CPTC-Token", self.server.token if token == "default" else token)
+        connection.putheader("Content-Length", str(len(body)))
+        connection.endheaders(body)
+        response = connection.getresponse()
+        text = response.read().decode("utf-8")
+        self.assert_safe_headers(response)
+        return response.status, text, response.getheader("Content-Type")
+
+    def made(self):
+        return sorted(path.name for path in self.work.iterdir() if "cptc-combined" in path.name)
+
+    def assert_sources_unchanged(self):
+        """Findings, incoming/, report.md and the logs are as they were."""
+        after = file_bytes(self.work)
+        for relative_path, data in self.work_before.items():
+            with self.subTest(path=relative_path):
+                self.assertEqual(after[relative_path], data)
+        self.assertEqual(file_bytes(self.logdir), self.logs_before)
+
+    def assert_not_exported(self, status_wanted, text_wanted, **options):
+        status, text, content_type = self.post(**options)
+        self.assertEqual((status, text), (status_wanted, text_wanted))
+        self.assertEqual(content_type, "text/plain; charset=utf-8")
+        self.assertEqual(self.made(), [])
+        self.assert_sources_unchanged()
+
+    def test_export_saves_the_file_and_answers_with_it(self):
+        with mock.patch.object(notebook.datetime, "datetime", wraps=datetime.datetime) as clock:
+            clock.now.return_value = COMBINED_NOW
+            status, text, content_type = self.post()
+        self.assertEqual((status, content_type), (200, "application/json"), text)
+        result = json.loads(text)
+        self.assertEqual(set(result), {"path", "sources", "text", "left_out"})
+        self.assertEqual(result["left_out"], [])
+        path = Path(result["path"])
+        self.assertEqual(path, self.work.resolve() / COMBINED_FILE)
+        self.assertEqual(self.made(), [COMBINED_FILE])
+        self.assertEqual(result["sources"], ["findings/F-001-a.md", "field-notes/alice/NOTE-web01.md"])
+        # The answer is the file's text, byte for byte; HTML-shaped text is just text.
+        self.assertEqual(result["text"].encode("utf-8"), path.read_bytes())
+        self.assertEqual(result["text"], "# findings/F-001-a.md\n\n### F-001: A\n\n---\n\n"
+                                         "# field-notes/alice/NOTE-web01.md\n\n"
+                                         "# web01 <script>alert(1)</script>\n")
+        self.assert_sources_unchanged()
+
+    def test_wrong_named_md_files_are_named_and_the_file_still_made(self):
+        # Chunk N8 review fix 2: left out of the combined file, but named.
+        support.write_fake_file(self.work, "findings/other.md", "Caf\u00e9 <b>not opened</b>\n")
+        (self.work / "field-notes" / "alice" / "web01.md").write_bytes(b"\xff not UTF-8\n")
+        before = file_bytes(self.work)
+        status, text, content_type = self.post()
+        self.assertEqual(status, 200, text)
+        result = json.loads(text)
+        self.assertEqual(result["left_out"], [
+            "left out: findings/other.md: name doesn't start with F-",
+            "left out: field-notes/alice/web01.md: name doesn't start with NOTE- or IR- or SU- or INJ-"])
+        # The file is exactly what it was without them; the warnings aren't in it.
+        self.assertEqual(result["sources"], ["findings/F-001-a.md", "field-notes/alice/NOTE-web01.md"])
+        self.assertEqual(Path(result["path"]).read_bytes(), result["text"].encode("utf-8"))
+        self.assertNotIn("left out", result["text"])
+        self.assertNotIn("not opened", result["text"])
+        after = file_bytes(self.work)
+        for relative_path, data in before.items():
+            with self.subTest(path=relative_path):
+                self.assertEqual(after[relative_path], data)
+        # Removed, and the next export no longer names it.
+        (self.work / "findings" / "other.md").unlink()
+        with mock.patch.object(notebook, "combined_file_name", lambda name, now: COMBINED_FILE):
+            again = json.loads(self.post()[1])
+        self.assertEqual(again["left_out"],
+                         ["left out: field-notes/alice/web01.md: name doesn't start with NOTE- or IR- or SU- or INJ-"])
+
+    def test_a_body_asking_for_logs_or_paths_is_ignored(self):
+        # The request has no fields; what goes in is fixed.
+        status, text, content_type = self.post(
+            json.dumps({"include_logs": True, "root": "/", "path": "../../etc/passwd",
+                        "name": "bob"}).encode("utf-8"))
+        self.assertEqual(status, 200, text)
+        result = json.loads(text)
+        self.assertEqual(result["sources"], ["findings/F-001-a.md", "field-notes/alice/NOTE-web01.md"])
+        self.assertNotIn("fake log", result["text"])
+        self.assertTrue(COMBINED_NAME_RE.fullmatch(Path(result["path"]).name))
+
+    def test_no_or_wrong_token_or_host_writes_nothing(self):
+        refused = "refused: use http://127.0.0.1:" + str(self.port)
+        for options in [{"token": None}, {"token": "wrong"}, {"host": "evil.example:80"}]:
+            with self.subTest(options=options), \
+                    mock.patch.object(notebook, "write_combined") as write:
+                status, text, content_type = self.post(**options)
+                self.assertEqual((status, text), (403, refused))
+                write.assert_not_called()
+        self.assertEqual(file_bytes(self.work), self.work_before)
+        # A good request after the refused ones still works.
+        self.assertEqual(self.post()[0], 200)
+
+    def test_get_is_not_a_route(self):
+        status, text = self.send("GET", "/combined-export", self.good_host())
+        self.assertEqual(status, 404)
+        self.assertEqual(self.made(), [])
+
+    def test_a_link_pointing_outside_is_a_403_with_its_path(self):
+        outside = support.make_worktree(self, {"secret.md": "outside\n"})
+        (self.work / "findings" / "F-003-link.md").symlink_to(outside / "secret.md")
+        status, text, content_type = self.post()
+        self.assertEqual((status, content_type), (403, "text/plain; charset=utf-8"))
+        self.assertTrue(text.startswith("refused: "), text)
+        self.assertIn("findings/F-003-link.md", text)
+        self.assertEqual(self.made(), [])
+
+    def test_a_refused_log_folder_is_a_403(self):
+        self.server.settings["logdir"] = self.work.resolve()
+        status, text, content_type = self.post()
+        self.assertEqual(status, 403)
+        self.assertTrue(text.startswith("refused: the log folder is read-only, not writing: cptc-combined-alice-"),
+                        text)
+        self.assertEqual(self.made(), [])
+
+    def test_same_second_export_is_a_409_and_keeps_the_first(self):
+        with mock.patch.object(notebook, "combined_file_name", lambda name, now: COMBINED_FILE):
+            self.assertEqual(self.post()[0], 200)
+            first = (self.work / COMBINED_FILE).read_bytes()
+            status, text, content_type = self.post()
+        self.assertEqual((status, text), (409, "not exported: a combined file named " + COMBINED_FILE
+                                          + " already exists; try again in a second"))
+        self.assertEqual((self.work / COMBINED_FILE).read_bytes(), first)
+
+    def test_a_source_that_is_not_utf8_is_a_500_with_its_path(self):
+        (self.work / "findings" / "F-004-cafe.md").write_bytes("Café\n".encode("cp1252"))
+        self.work_before = file_bytes(self.work)
+        status, text, content_type = self.post()
+        self.assertEqual((status, content_type), (500, "text/plain; charset=utf-8"))
+        self.assertTrue(text.startswith("not exported: findings/F-004-cafe.md is not UTF-8 text ("), text)
+        self.assertEqual(self.made(), [])
+        self.assert_sources_unchanged()
+
+    def test_a_source_name_that_is_not_utf8_is_a_500(self):
+        real_listdir = os.listdir
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: real_listdir(folder) + ["F-003-\udcff.md"]):
+            status, text, content_type = self.post()
+        self.assertEqual((status, text), (500, "not exported: file name isn't UTF-8: "
+                                               "'findings/F-003-\\udcff.md'"))
+        self.assertEqual(self.made(), [])
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_an_unreadable_folder_is_a_500_with_its_path(self):
+        locked = self.work / "field-notes" / "alice"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o755)
+        status, text, content_type = self.post()
+        locked.chmod(0o755)
+        self.assertEqual(status, 500)
+        self.assertTrue(text.startswith("not exported: [Errno 13] Permission denied: "), text)
+        self.assertIn(str(locked.resolve()), text)
+        self.assertEqual(self.made(), [])
+
+    def test_a_write_failure_is_a_500_with_no_file(self):
+        with mock.patch.object(notebook.os, "link", side_effect=OSError("disk full")):
+            self.assert_not_exported(500, "not exported: disk full")
+
+
+class CombinedPageTests(ServerTestCase):
+    """N8-02: the combined Markdown action in the Export view. Display safety is PageSafetyTests' (NT4-06)."""
+
+    def get_page(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        return page
+
+    def test_it_sits_under_export_as_a_fallback(self):
+        page = self.get_page()
+        # Shown at the end of the Export view, after the zip's controls.
+        self.assertIn('      notMade("Not exported: " + error);\n    });\n  });\n\n  showCombinedExport();\n}', page)
+        self.assertEqual(page.count("showCombinedExport()"), 2)
+        self.assertIn('main.appendChild(element("h3", "Combined Markdown (fallback)"));', page)
+        self.assertIn('"Only for when files can\'t be moved, e.g. over RDP with no file " +\n'
+                      '    "transfer: makes one Markdown file of your findings/ and the NOTE, IR, SU and INJ files in " +\n'
+                      '    "field-notes/<your name>/, saved in your working copy, to copy over the clipboard. " +\n'
+                      '    "Use the zip when you can."', page)
+
+    def test_the_request_is_a_post_with_the_token_and_no_fields(self):
+        page = self.get_page()
+        self.assertIn('fetch("/combined-export", {\n      method: "POST",\n'
+                      '      headers: {"X-CPTC-Token": TOKEN}\n    })', page)
+
+    def test_the_path_sources_and_text_show(self):
+        page = self.get_page()
+        self.assertIn('status.appendChild(element("p", "Saved " + result.path));\n'
+                      "        if (result.sources.length === 0) {", page)
+        self.assertIn('status.appendChild(element("p", "Nothing to combine: no findings or notes yet."));', page)
+        self.assertIn("result.sources.forEach(function (source) {\n"
+                      '          status.appendChild(element("p", source));', page)
+        # Read-only, so the box is for selecting and copying, not editing.
+        self.assertIn('var combined = element("textarea");\n  combined.readOnly = true;', page)
+        self.assertIn("combined.hidden = false;", page)
+
+    def test_a_new_click_clears_the_last_result_first(self):
+        page = self.get_page()
+        # The Copy button and its message too, so Copy never offers an
+        # earlier export's text while a new one is pending or failed.
+        self.assertIn("    make.disabled = true;\n    status.textContent = \"\";\n"
+                      "    combined.hidden = true;\n    combined.value = \"\";\n"
+                      "    copy.hidden = true;\n    copied.className = \"message\";\n"
+                      "    copied.textContent = \"\";\n", page)
+
+    def test_copy_shows_after_an_export_and_copies_the_shown_text(self):
+        # Chunk N8 review D5 B, like the Logs view's copy button.
+        page = self.get_page()
+        self.assertIn('var copy = element("button", "Copy");\n  copy.type = "button";\n  copy.hidden = true;', page)
+        self.assertIn("        combined.hidden = false;\n        copy.hidden = false;", page)
+        self.assertIn("navigator.clipboard.writeText(combined.value).then(function () {\n"
+                      "      markOk(copied);\n", page)
+        # No clipboard, or a refusal: the by-hand message, never "Copied."
+        self.assertIn('var cantCopy = "Couldn\'t copy it: select the text above and copy it by hand.";\n'
+                      "    if (!navigator.clipboard) {\n      markError(copied);\n", page)
+        self.assertIn("    }, function () {\n      markError(copied);\n      copied.textContent = cantCopy;\n    });\n"
+                      "  });\n\n  make.addEventListener", page)
+
+    def test_left_out_files_show_as_an_amber_warning(self):
+        # Chunk N8 review fix 2.
+        page = self.get_page()
+        self.assertIn("        if (result.left_out.length > 0) {\n", page)
+        self.assertIn("          markWarning(status);\n        }\n"
+                      "        result.left_out.forEach(function (line) {\n"
+                      '          status.appendChild(element("p", line));', page)
+
+    def test_a_failure_shows_its_text_and_unlocks_the_button(self):
+        page = self.get_page()
+        self.assertEqual(page.count("function notMade(text) {\n      make.disabled = false;\n"
+                                    "      markError(status);\n"
+                                    '      status.appendChild(element("p", text));'), 2)
+        self.assertEqual(page.count("return response.text().then(notMade);"), 2)
+
+
 class LogPageTests(ServerTestCase):
     """N6-03: the page's Logs view. Display safety is PageSafetyTests' (NT4-06)."""
 
@@ -6472,18 +7577,27 @@ class LookTests(ServerTestCase):
             "  markError(leaveRow);",
             "      create.disabled = false;\n      markError(status);",
             "      make.disabled = false;\n      markError(status);",
+            "      make.disabled = false;\n      markError(status);",  # the combined file, same words
             "      copy.disabled = false;\n      markError(status);",
             "      markError(copied);\n      copied.textContent = cantCopy;\n      return;",
             "      markError(copied);\n      copied.textContent = cantCopy;\n    });",
             '      markError(messages);\n      messages.appendChild(element("p", "Not saved: " + text));',
+            "      run.disabled = false;\n      markError(status);",  # Compile
+            # The combined file's Copy, the same two as the copy-command button.
+            "      markError(copied);\n      copied.textContent = cantCopy;\n      return;",
+            "      markError(copied);\n      copied.textContent = cantCopy;\n    });",
         ]
         oks = [
             '        markOk(status);\n        status.appendChild(element("p", "Created " + result.path));',
+            '        markOk(status);\n        status.appendChild(element("p", "Saved " + result.path));',
+            # The combined file says it the same way.
             '        markOk(status);\n        status.appendChild(element("p", "Saved " + result.path));',
             '        markOk(status);\n        status.appendChild(element("p", "Copied to " + result.path));',
             '      markOk(copied);\n      copied.textContent = "Copied.";',
             '      markOk(messages);\n      messages.appendChild(element("p", "Saved."));',
             '          markOk(savedLine);\n          savedLine.textContent = "saved at "',
+            '      markOk(copied);\n      copied.textContent = "Copied.";',  # the combined file's Copy
+            "        } else {\n          markOk(status);\n        }",  # Compile, no problem found
         ]
         # Warnings and notes are amber (F2 B); the fill-in status and "not
         # saved yet" stay plain (test below).
@@ -6499,6 +7613,11 @@ class LookTests(ServerTestCase):
             '          markWarning(status);\n          status.appendChild(element("p", "Left out of the zip:"));',
             "      if (warningsShown) {\n        markWarning(messages);",
             '        markWarning(status);\n        status.appendChild(element("p", result.warning));',
+            # Compile found a problem: its WARNING lines are in the block.
+            "        if (problems) {\n          markWarning(status);",
+            # A combined file with nothing in it, or with .md files left out.
+            '          markWarning(status);\n          status.appendChild(element("p", "Nothing to combine',
+            "        if (result.left_out.length > 0) {\n          /* Made, but some .md files aren't in it: amber",
         ]
         for mark in errors + oks + warnings:
             with self.subTest(mark=mark):
@@ -6528,8 +7647,8 @@ class LookTests(ServerTestCase):
         for hook in hooks:
             with self.subTest(hook=hook):
                 self.assertIn(hook, script)
-        # Export's and the evidence copy's status areas.
-        self.assertEqual(script.count('var status = main.appendChild(element("div"));\n  status.className = "message";'), 2)
+        # Export's two (zip, combined file), the evidence copy's and Compile's status areas.
+        self.assertEqual(script.count('var status = main.appendChild(element("div"));\n  status.className = "message";'), 4)
 
     def test_file_list_error_shows_as_a_message(self):
         _, script = self.get_style_and_script()
@@ -6570,6 +7689,428 @@ class LookTests(ServerTestCase):
         style, _ = self.get_style_and_script()
         self.assertNotIn("@import", style)
         self.assertNotIn("url(", style)
+
+
+# NTX-01 and NTX-02: one fake working copy with every built feature's inputs.
+# The real finding template, so the fill-in round trip uses what testers use.
+NTX_CHECKLIST = "# Fake web checklist\n\n- [ ] Scan web01\n- [ ] Log in to the admin page\n"
+NTX_LOG = "alice_20261107T101500Z.log"
+
+
+def ntx_files():
+    """The fake working copy's files, by root-relative path."""
+    files = dict(FAKE_TEMPLATES)
+    files["templates/finding.md"] = (support.TOOLS_DIR.parent / "templates" / "finding.md").read_text(encoding="utf-8")
+    files.update({
+        "checklists/10-fake-web.md": NTX_CHECKLIST,
+        "findings/F-001-matrix.md": "### F-001: Matrix finding\n",
+        "incoming/bob/findings/F-002-smb-signing.md": EVENT_FILES["incoming/bob/findings/F-002-smb-signing.md"],
+        "report.md": "# Report\n",
+    })
+    return files
+
+
+class NtxServerTestCase(ServerTestCase):
+    """A server on the NTX fake working copy and a log folder with hostile logs; no tests of its own."""
+
+    def setUp(self):
+        super().setUp()
+        self.work = support.make_worktree(self, ntx_files())
+        self.server.settings["root"] = self.work.resolve()
+        support.make_hostile_logs(self.logdir)
+
+    def request(self, method, path, body=None, host=None, token="default"):
+        """Send one request; return (status, content type, text). Every answer must have the safety headers."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(connection.close)
+        connection.putrequest(method, path, skip_host=True)
+        connection.putheader("Host", host or self.good_host())
+        if token is not None:
+            connection.putheader("X-CPTC-Token", self.server.token if token == "default" else token)
+        data = b"" if body is None else json.dumps(body).encode("utf-8")
+        connection.putheader("Content-Length", str(len(data)))
+        connection.endheaders(data)
+        response = connection.getresponse()
+        text = response.read().decode("utf-8")
+        self.assert_safe_headers(response)
+        return response.status, response.getheader("Content-Type"), text
+
+    def ok_json(self, method, path, body=None):
+        status, content_type, text = self.request(method, path, body)
+        self.assertEqual((status, content_type), (200, "application/json"), method + " " + path + ": " + text)
+        return json.loads(text)
+
+    def everything(self):
+        """Every name and its bytes or link target in the working copy and the log folder."""
+        return tree(self.work), tree(self.logdir)
+
+    def tick_key(self):
+        records = notebook.checklist_records("checklists/10-fake-web.md", NTX_CHECKLIST)
+        return [record["key"] for record in records if record["type"] == "task"][0]
+
+
+class RouteMatrixTests(NtxServerTestCase):
+    """NTX-01: every built route, against the guards (Constraints 4, 8, 9)."""
+
+    # Written out, not read from the route tables, so a route added without
+    # being listed here fails test_the_route_tables_are_exactly_these.
+    GETS = ["/", "/checklists", "/checklist", "/checklist-view", "/files", "/new-data",
+            "/file", "/logs", "/log"]
+    POSTS = ["/checklist-state", "/new-file", "/file", "/export", "/evidence", "/compile",
+             "/combined-export"]
+
+    def valid_requests(self):
+        """(method, path with query, body) that reaches each route's success branch."""
+        text = (self.work / "findings" / "F-001-matrix.md").read_text(encoding="utf-8")
+        return [
+            ("GET", "/", None),
+            ("GET", "/checklists", None),
+            ("GET", "/checklist?path=checklists/10-fake-web.md", None),
+            ("GET", "/checklist-view?path=checklists/10-fake-web.md", None),
+            ("GET", "/files", None),
+            ("GET", "/new-data", None),
+            ("GET", "/file?path=findings/F-001-matrix.md", None),
+            ("GET", "/logs", None),
+            ("GET", "/log?path=" + NTX_LOG, None),
+            ("POST", "/checklist-state", {"key": self.tick_key(), "checked": True}),
+            ("POST", "/new-file", {"type": "Note", "title": "Matrix note", "nnn": None, "library": None}),
+            ("POST", "/file", {"path": "findings/F-001-matrix.md", "text": text, "base": text, "fields": []}),
+            ("POST", "/export", {"include_logs": False}),
+            ("POST", "/evidence", {"path": NTX_LOG, "name": "matrix.log"}),
+            ("POST", "/compile", None),
+            ("POST", "/combined-export", None),
+        ]
+
+    def table_paths(self, table):
+        # ServerTestCase's own fake routes aren't built routes.
+        return {path for path in table if not path.startswith("/test-")}
+
+    def test_the_route_tables_are_exactly_these(self):
+        self.assertEqual(self.table_paths(notebook.GET_ROUTES), set(self.GETS))
+        self.assertEqual(self.table_paths(notebook.POST_ROUTES), set(self.POSTS))
+        # Every route has a valid request below.
+        requested = {(method, path.split("?")[0]) for method, path, _ in self.valid_requests()}
+        self.assertEqual(requested, {("GET", path) for path in self.GETS}
+                         | {("POST", path) for path in self.POSTS})
+
+    def test_every_route_succeeds_and_only_the_page_is_html(self):
+        for method, path, body in self.valid_requests():
+            with self.subTest(method=method, path=path):
+                status, content_type, text = self.request(method, path, body)
+                self.assertEqual(status, 200, text)
+                if path == "/":
+                    self.assertEqual(content_type, "text/html; charset=utf-8")
+                else:
+                    self.assertIn(content_type, ["application/json", "text/plain; charset=utf-8"])
+
+    def assert_no_route_runs(self, method, path, body, **options):
+        """The request is refused before its route: 403, the route not called, nothing changed."""
+        table = notebook.GET_ROUTES if method == "GET" else notebook.POST_ROUTES
+        route = path.split("?")[0]
+        before = self.everything()
+        with mock.patch.dict(table, {route: mock.Mock()}):
+            status, content_type, text = self.request(method, path, body, **options)
+            table[route].assert_not_called()
+        self.assertEqual((status, content_type, text),
+                         (403, "text/plain; charset=utf-8", "refused: use http://127.0.0.1:" + str(self.port)))
+        self.assertEqual(self.everything(), before)
+
+    def test_wrong_host_reaches_no_route(self):
+        for method, path, body in self.valid_requests():
+            for host in ["evil.example:" + str(self.port), "localhost:" + str(self.port)]:
+                with self.subTest(method=method, path=path, host=host):
+                    self.assert_no_route_runs(method, path, body, host=host)
+
+    def test_missing_or_wrong_token_reaches_no_post_route(self):
+        for method, path, body in self.valid_requests():
+            if method != "POST":
+                continue
+            for token in [None, "wrong", ""]:
+                with self.subTest(path=path, token=token):
+                    self.assert_no_route_runs(method, path, body, token=token)
+
+    def smuggled_reply(self, path, refused_headers, protocol):
+        """Send a refused POST to path whose body is a whole valid POST to it; return the raw reply."""
+        smuggled = ("POST " + path + " HTTP/1.1\r\nHost: " + self.good_host()
+                    + "\r\nX-CPTC-Token: " + self.server.token
+                    + "\r\nContent-Length: 0\r\n\r\n").encode("ascii")
+        request = ("POST " + path + " HTTP/1.1\r\n" + refused_headers
+                   + "Content-Length: " + str(len(smuggled)) + "\r\n\r\n").encode("ascii")
+        reply = b""
+        with mock.patch.object(notebook.NotebookHandler, "protocol_version", protocol), \
+                socket.create_connection(("127.0.0.1", self.port), timeout=2) as sock:
+            sock.sendall(request + smuggled)
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    reply += chunk
+            except socket.timeout:
+                # A connection left open ends the read here instead of at a close.
+                pass
+        return reply
+
+    def test_a_refused_compile_or_combined_export_never_runs_a_smuggled_one(self):
+        refusals = {"wrong host": "Host: evil.example:" + str(self.port) + "\r\nX-CPTC-Token: "
+                                  + self.server.token + "\r\n",
+                    "no token": "Host: " + self.good_host() + "\r\n"}
+        for path in ["/compile", "/combined-export"]:
+            for case, headers in refusals.items():
+                for protocol in ["HTTP/1.0", "HTTP/1.1"]:
+                    with self.subTest(path=path, case=case, protocol=protocol):
+                        before = self.everything()
+                        reply = self.smuggled_reply(path, headers, protocol)
+                        self.assertTrue(reply.startswith((protocol + " 403").encode("ascii")), reply[:40])
+                        self.assertEqual(reply.count(b"HTTP/1."), 1)
+                        self.assertEqual(self.everything(), before)
+
+    def test_path_routes_refuse_traversal_absolute_nul_and_outside_links(self):
+        outside = support.make_worktree(self, {"secret.md": "outside\n", "secret.log": "outside\n"})
+        (self.work / "checklists" / "90-link.md").symlink_to(outside / "secret.md")
+        (self.work / "findings" / "F-009-link.md").symlink_to(outside / "secret.md")
+        (self.logdir / "link.log").symlink_to(outside / "secret.log")
+        bad_paths = ["../../etc/passwd", str(outside / "secret.md"), "findings/F-001-matrix.md\x00x"]
+        requests = []
+        for bad in bad_paths:
+            for route in ["/checklist", "/checklist-view", "/file", "/log"]:
+                requests.append(("GET", route + "?path=" + quote(bad), None))
+            requests.append(("POST", "/file", {"path": bad, "text": "x\n", "base": "x\n", "fields": []}))
+            requests.append(("POST", "/evidence", {"path": bad, "name": "bad.log"}))
+        for route, link in [("/checklist", "checklists/90-link.md"), ("/checklist-view", "checklists/90-link.md"),
+                            ("/file", "findings/F-009-link.md"), ("/log", "link.log")]:
+            requests.append(("GET", route + "?path=" + quote(link), None))
+        requests.append(("POST", "/file", {"path": "findings/F-009-link.md", "text": "x\n",
+                                           "base": "outside\n", "fields": []}))
+        requests.append(("POST", "/evidence", {"path": "link.log", "name": "bad.log"}))
+        for method, path, body in requests:
+            with self.subTest(method=method, path=path, body=body):
+                before = self.everything()
+                status, content_type, text = self.request(method, path, body)
+                self.assertIn(status, (400, 403, 404), text)
+                self.assertEqual(content_type, "text/plain; charset=utf-8")
+                self.assertNotIn("outside\n", text)
+                self.assertEqual(self.everything(), before)
+        self.assertEqual((outside / "secret.md").read_text(encoding="utf-8"), "outside\n")
+
+
+# Every box of the real finding template, filled with coherent fake data
+# (BUILD-SPEC Definition of done; dev-tasks NTX-02 carry-forward, user A
+# 2026-10-22). The dropdowns are keyed by their options.
+NTX_VALUES = {
+    "CVSS_VECTOR": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H",
+    "CVSS_SCORE": "8.8",
+    "SEVERITY_RATIONALE": "Alice signed in to the fake web01 admin page and read its settings.",
+    "LIKELIHOOD": "Anyone on the guest network can reach the login page.",
+    "HOST": "web01",
+    "HOST_IP": "10.0.0.10",
+    "URL": "https://web01.example.invalid/admin",
+    "ACCOUNT": "admin",
+    "TESTER": "alice",
+    "DATE": "2026-11-07",
+    "TIME": "10:15",
+    "CWE_ID": "1392",
+    "ATTACK_TECHNIQUE_ID": "T1078.001",
+    "REFERENCE_URL": "https://example.invalid/standards/default-passwords",
+    "SUMMARY": "The fake web01 admin page still accepts its vendor default password.",
+    "BUSINESS_IMPACT": "Anyone on the guest network could change the fake ticketing settings.",
+    "TECHNICAL_DETAIL": "The admin account was never given a new password after install.",
+    "STARTING_POSITION": "guest network, no credentials.",
+    "REPRODUCTION_STEPS": ("1. Open `https://web01.example.invalid/admin`.\n"
+                           "   Expected: the admin login page is shown.\n"
+                           "2. Sign in as `admin` with the vendor default password.\n"
+                           "   Expected: the admin dashboard is shown."),
+    "WHAT_IT_SHOWS": "the admin dashboard after signing in",
+    "LOG_LINES_WITH_TIMESTAMPS": "2026-11-07 10:15:02 GET /admin 200",
+    "IMMEDIATE_FIX": "Set a new, unique password on the admin account.",
+    "LONG_TERM_CONTROL": "Change every default password before a system goes live.",
+    "VERIFICATION_CHECK": "Repeat step 2 and confirm the login is refused.",
+    "PREVIOUS_FINDING_ID": "none",
+    "NEXT_FINDING_ID": "none",
+}
+NTX_CHOICES = {"Critical": "High", "Confirmed": "Exploited"}
+
+
+class FakeUserWorkflowTests(NtxServerTestCase):
+    """NTX-02: one fake tester's day through every built feature (Definition of done)."""
+
+    def setUp(self):
+        super().setUp()
+        support.write_fake_file(self.work, "tracker/findings-index.csv",
+                                "finding_id,title,severity,cvss_score,owner,status,in_report\n"
+                                "F-001,Default admin password on web01,High,8.8,alice,done,yes\n"
+                                "F-002,SMB signing is not required on dc01,Medium,6.1,bob,review,no\n")
+        # The fixture's placeholder finding isn't part of this day.
+        (self.work / "findings" / "F-001-matrix.md").unlink()
+        self.incoming = tree(self.work / "incoming")
+        self.logs = tree(self.logdir)
+
+    def assert_read_only_folders_unchanged(self):
+        self.assertEqual(tree(self.work / "incoming"), self.incoming)
+        self.assertEqual(tree(self.logdir), self.logs)
+
+    def problem_lines(self, lines):
+        return [line for line in lines if line.startswith(("WARNING:", "ERROR:"))]
+
+    def direct_compile(self, final=False):
+        with mock.patch("shutil.which", return_value=None):
+            return compile.run(self.work, None, final)
+
+    def endpoint_compile(self):
+        with mock.patch("shutil.which", return_value=None):
+            return self.ok_json("POST", "/compile")
+
+    def outputs(self):
+        return {name: (self.work / "build" / name).read_bytes() for name in compile.OUTPUT_FILES}
+
+    def fill_every_box(self, path):
+        """Open the file, fill every box, delete the notes in the text, save; return the save's answer."""
+        opened = self.ok_json("GET", "/file?path=" + quote(path))
+        fields = []
+        text = opened["text"]
+        for field in opened["fields"]:
+            if field["control"] == "note":
+                # The tester deletes each note in the text box once read
+                # (notes are never removed by a save).
+                text = text.replace(field["marker"], "", 1)
+                value = ""
+            elif field["control"] == "dropdown":
+                value = NTX_CHOICES[field["options"][0]]
+            else:
+                value = NTX_VALUES[field["name"]]
+            fields.append(dict(field, value=value))
+        # Every box the page shows has a value; none is left out.
+        self.assertEqual({field["name"] for field in opened["fields"] if field["control"] not in ("note", "dropdown")},
+                         set(NTX_VALUES))
+        return self.ok_json("POST", "/file", {"path": path, "text": text, "base": opened["text"],
+                                              "fields": fields})
+
+    def test_a_fake_testers_day(self):
+        # Open the app.
+        status, content_type, page = self.request("GET", "/")
+        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
+
+        # Checklists: tick a task, reload, and it is still ticked.
+        self.assertEqual(self.ok_json("GET", "/checklists")["checklists"], ["checklists/10-fake-web.md"])
+        key = self.tick_key()
+        self.ok_json("POST", "/checklist-state", {"key": key, "checked": True})
+        view = self.ok_json("GET", "/checklist-view?path=checklists/10-fake-web.md")
+        ticked = [record["checked"] for record in view["records"] if record["type"] == "task"]
+        self.assertEqual(ticked, [True, False])
+
+        # New: a finding from the real template, and a note.
+        created = self.ok_json("POST", "/new-file", {"type": "Finding", "title": "Default admin password on web01",
+                                                     "nnn": "001", "library": None})
+        path = created["path"]
+        self.assertEqual(path, "findings/F-001-default-admin-password-on-web01.md")
+        note = self.ok_json("POST", "/new-file", {"type": "Note", "title": "web01", "nnn": None, "library": None})
+        self.assertEqual(note["path"], "field-notes/alice/NOTE-web01.md")
+
+        # Fill-in: every box, save, and read it back.
+        saved = self.fill_every_box(path)
+        self.assertEqual(saved["warnings"], [])
+        self.assertEqual(saved["fields"], [])
+        self.assertEqual(self.ok_json("GET", "/file?path=" + quote(path))["text"], saved["text"])
+        self.assertEqual((self.work / path).read_text(encoding="utf-8"), saved["text"])
+        self.assertNotIn("[[", saved["text"])
+
+        # Compile, direct: the filled finding is READY with no QA lines.
+        exit_code, qa_text, lines = self.direct_compile()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(self.problem_lines(lines), [])
+        self.assertIn("  " + path + ": READY\n", qa_text)
+        self.assertEqual(lines[-1], "QA: 2 findings; 2 READY; 0 DRAFT; 0 warnings; 0 errors")
+        direct = self.outputs()
+        # The Compile button gives the same answer and the same four files.
+        result = self.endpoint_compile()
+        self.assertEqual((result["exit_code"], result["qa"], result["lines"]), (exit_code, qa_text, lines))
+        self.assertEqual(self.outputs(), direct)
+        # --final passes too once report.md is clean.
+        self.assertEqual(self.direct_compile(final=True)[0], 0)
+
+        # The report writer pastes the finding into report.md; a later
+        # source edit never rewrites that copy.
+        report = "# Report\n\n" + saved["text"]
+        (self.work / "report.md").write_text(report, encoding="utf-8")
+
+        # A hand edit turns the finding back into a draft.
+        drafted = saved["text"].replace("web01 (10.0.0.10)", "[[HOST]] (10.0.0.10)")
+        (self.work / path).write_text(drafted, encoding="utf-8")
+        # 1-based, on "\n" like compile.py's line numbers.
+        line = str([number for number, text in enumerate(drafted.split("\n"), 1) if "[[HOST]]" in text][0])
+        result = self.endpoint_compile()
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("  " + path + ": DRAFT: 1 unresolved markers, 0 missing fields\n", result["qa"])
+        self.assertEqual(self.problem_lines(result["lines"]),
+                         ["WARNING: " + path + ":" + line + ": leftover marker [[HOST"])
+        # --final blocks the same finding.
+        exit_code, qa_text, lines = self.direct_compile(final=True)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(self.problem_lines(lines), ["ERROR: " + path + ":" + line + ": leftover marker [[HOST"])
+        self.assertEqual((self.work / "report.md").read_text(encoding="utf-8"), report)
+
+        # A marker only in report.md: draft ignores it, --final blocks it.
+        (self.work / path).write_text(saved["text"], encoding="utf-8")
+        (self.work / "report.md").write_text(report + "\n[[EXEC_SUMMARY]]\n", encoding="utf-8")
+        result = self.endpoint_compile()
+        self.assertEqual(self.problem_lines(result["lines"]), [])
+        exit_code, qa_text, lines = self.direct_compile(final=True)
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(self.problem_lines(lines), ["ERROR: report.md:" + str(report.count("\n") + 2)
+                                                     + ": leftover marker [[EXEC_SUMMARY"])
+
+        # Logs: the hostile log in its three forms, then copied into evidence/.
+        self.assertEqual(self.ok_json("GET", "/logs")["logs"], [NTX_LOG])
+        log = self.ok_json("GET", "/log?path=" + NTX_LOG)
+        self.assertEqual(log["raw"], support.HOSTILE_LOG)
+        self.assertEqual(log["clean"], notebook.clean_log_text(support.HOSTILE_LOG))
+        self.assertEqual(log["commands"], support.HOSTILE_CMDS)
+        copied = self.ok_json("POST", "/evidence", {"path": NTX_LOG, "name": "F-001-login.log"})
+        self.assertEqual((self.work / "evidence" / "F-001-login.log").read_bytes(),
+                         (self.logdir / NTX_LOG).read_bytes())
+        self.assertEqual(copied["path"], "evidence/F-001-login.log")
+
+        # ZIP: without logs, then with them a second later.
+        with mock.patch.object(notebook, "export_file_name", lambda name, now: "cptc-export-alice-20261107T110000.zip"):
+            plain = self.ok_json("POST", "/export", {"include_logs": False})
+        with mock.patch.object(notebook, "export_file_name", lambda name, now: "cptc-export-alice-20261107T110001.zip"):
+            with_logs = self.ok_json("POST", "/export", {"include_logs": True})
+        own = {path: (self.work / path).read_bytes(),
+               "field-notes/alice/NOTE-web01.md": (self.work / "field-notes/alice/NOTE-web01.md").read_bytes(),
+               "field-notes/alice/checklist-state.json":
+                   (self.work / "field-notes/alice/checklist-state.json").read_bytes(),
+               "evidence/F-001-login.log": (self.logdir / NTX_LOG).read_bytes(),
+               "tracker/findings-index.csv": (self.work / "tracker/findings-index.csv").read_bytes()}
+        logs = {"logs/" + NTX_LOG: (self.logdir / NTX_LOG).read_bytes(),
+                "logs/alice_20261107T101500Z.cmds.log": (self.logdir / "alice_20261107T101500Z.cmds.log").read_bytes()}
+        for result, wanted in [(plain, own), (with_logs, dict(own, **logs))]:
+            with zipfile.ZipFile(result["path"]) as archive:
+                files = {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
+            self.assertEqual(files, wanted)
+
+        # Combined Markdown: the saved finding and the note, not the report
+        # or compile's combined file; again after a source change.
+        with mock.patch.object(notebook, "combined_file_name", lambda name, now: "cptc-combined-alice-20261107T111500.md"):
+            combined = self.ok_json("POST", "/combined-export")
+        self.assertEqual(combined["sources"], [path, "field-notes/alice/NOTE-web01.md"])
+        # The new note is still empty, so it gets only the added final line break.
+        self.assertEqual((self.work / "field-notes/alice/NOTE-web01.md").read_bytes(), b"")
+        self.assertEqual(combined["text"],
+                         "# " + path + "\n\n" + saved["text"] + "\n---\n\n# field-notes/alice/NOTE-web01.md\n\n\n")
+        self.assertNotEqual(combined["text"], (self.work / "build" / "findings-combined.md").read_text(encoding="utf-8"))
+        self.assertNotIn("[[EXEC_SUMMARY]]", combined["text"])
+        (self.work / "field-notes/alice/NOTE-web01.md").write_text("# web01\n\nport 443 open\n", encoding="utf-8")
+        with mock.patch.object(notebook, "combined_file_name", lambda name, now: "cptc-combined-alice-20261107T111501.md"):
+            again = self.ok_json("POST", "/combined-export")
+        self.assertTrue(again["text"].endswith("# field-notes/alice/NOTE-web01.md\n\n# web01\n\nport 443 open\n"))
+        self.assertNotEqual(again["path"], combined["path"])
+        # Both files are on disk, each with the text its answer gave.
+        for result in (combined, again):
+            self.assertEqual(Path(result["path"]).read_bytes(), result["text"].encode("utf-8"))
+
+        # Teammates' copies and the logs were never changed.
+        self.assert_read_only_folders_unchanged()
+
 
 if __name__ == "__main__":
     unittest.main()

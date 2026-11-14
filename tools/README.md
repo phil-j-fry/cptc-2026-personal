@@ -1,6 +1,6 @@
 # Tools and scripts: how to run them
 
-This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py` (built in part), `scripts/make-workcopy.sh`, `scripts/pull.sh` and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
+This is the one README for the team's tools and scripts: `tools/compile.py`, `tools/notebook.py`, `scripts/make-workcopy.sh`, `scripts/pull.sh` and `scripts/logged-shell.sh`. It says what each one does, how to run it, and the rules every one of them follows.
 
 **Before running anything, make your working copy, `~/cptc-work`,** with `scripts/make-workcopy.sh` (below; also comp repo `README.md` → "Working copy and moving files on the day"). Every other command below runs from inside `~/cptc-work`, never from the git clone.
 
@@ -19,7 +19,7 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 | `scripts/pull.sh` | The report writer's pull of every teammate's work into `incoming/<name>/`. Needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync` | Built |
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
 | `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21) |
-| `tools/notebook.py` | A local web page for the checklists, your own files, new files from the templates, filling them in, the logs and a zip export; later a compile button and a combined Markdown export | Built in part: everything except the compile button and the combined Markdown export |
+| `tools/notebook.py` | A local web page for the checklists, your own files, new files from the templates, filling them in, the logs, a zip export, a compile button and a combined Markdown export | Built |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
 
 Design docs and function-by-function walkthroughs are in the public app repo, https://github.com/phil-j-fry/cptc-2026-personal (`tools/`).
@@ -130,7 +130,7 @@ It only works on the team's own files. It doesn't scan, attack or touch any targ
 - **A working copy.** It works on `~/cptc-work` by default (`--root PATH` for another folder, e.g. a practice copy). It refuses a folder with `.git` directly inside it (a folder or a file), such as the git clone, before writing anything, so event data doesn't end up in the repo by mistake. It only looks in that one folder: a subfolder of the clone isn't caught.
 - **Files named and filled from the templates.** It reads `findings/F-*.md` and teammates' `incoming/*/findings/F-*.md`, the `IR-`, `SU-` and `INJ-` files in `field-notes/*/` and `incoming/*/field-notes/*/`, and `tracker/findings-index.csv` (or `--index PATH`). It reads them by the templates' headings and labelled lines (e.g. `- **Severity:**`), so keep those as the templates have them (file names: `templates/README.md` → File names).
 - **Everything stays inside the working copy.** A path that leads outside it, through `..` or a symlink, is refused and named in the error. `build/` and its four output files must be plain folders and files, not links.
-- **No notebook needed.** It works on hand-edited files on its own. The notebook's Compile button, when it is built, is planned to call the same code.
+- **No notebook needed.** It works on hand-edited files on its own. The notebook's Compile button calls the same code.
 
 ### How to run it
 
@@ -186,7 +186,7 @@ The screen shows, in this order:
 
 A check can show `FAIL (0 errors, 1 warnings)` while `--final` still exits 0: only errors change the exit code.
 
-The same work is available from Python without printing: `run(root, index, final)` in `compile.py` returns the exit code, the text of `qa-report.txt` and the screen lines. The tests use it, and the notebook's Compile button is planned to.
+The same work is available from Python without printing: `run(root, index, final)` in `compile.py` returns the exit code, the text of `qa-report.txt` and the screen lines. The tests use it, and so does the notebook's Compile button.
 
 ### The checks
 
@@ -339,9 +339,9 @@ report.md NOT FOUND: report not checked
 
 **5. Clean up** when you're done: `cd ~ && rm -rf ~/cptc-practice`.
 
-## Checklists and your files in your browser: `tools/notebook.py` (built in part)
+## Checklists and your files in your browser: `tools/notebook.py`
 
-A page on your own box for the checklists, your own files, new files, filling them in, the logs and a zip export; a compile button and a combined Markdown export are still to come. Start it from inside `~/cptc-work`:
+A page on your own box for the checklists, your own files, new files, filling them in, the logs, a zip export, a compile button and a combined Markdown export. Start it from inside `~/cptc-work`:
 
 ```
 python3 tools/notebook.py --name <yourname> [--root ~/cptc-work] [--port 8765]
@@ -364,9 +364,7 @@ Then open the address it prints (`Notebook: http://127.0.0.1:8765` by default). 
 - **Export:** one zip, `cptc-export-<name>-<timestamp>.zip`, saved in the working copy and laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would (option 3 in the comp repo `README.md` → "Getting files to the report writer"). Logs go in only if "Include logs" is ticked (off by default).
 - **Light / dark:** follows your system's setting; the button swaps it. Plain black and white with one grey; messages and warnings sit in a bordered block.
 
-**Still to come:** a compile button and a combined Markdown export.
-
-**Until then:** run `compile.py` from the terminal.
+**Also built:** a compile button and a combined Markdown export; their descriptions here are still to be added.
 
 ## Picking up a tool fix mid-event
 
@@ -415,7 +413,7 @@ Checks a teammate runs by hand on their own Kali VM, never in `~/cptc-work`: aft
 
 #### `notebook.py`
 
-Covers start-up, the page, checklists, your own files and New file. The fill-in view, autosave, logs and export are built, but their items are still to be added here; the compile button's come when it is built.
+Covers start-up, the page, checklists, your own files and New file. The fill-in view, autosave, logs, export, the compile button and the combined Markdown export are built, but their items are still to be added here.
 
 **Setup:** step 1 of "Example: a practice run" above makes `~/cptc-practice`. In one terminal, from inside it, start the notebook on a spare port so it can't clash with a real one: `python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766`. Open `http://127.0.0.1:8766` in Firefox on the same box. Run the commands below in a second terminal, also from inside `~/cptc-practice`. Any item that adds a file removes it again at its end. When you're done, stop the notebook with Ctrl+C (it prints `Notebook stopped.`) and clean up with step 5 of the example.
 
@@ -432,7 +430,7 @@ Covers start-up, the page, checklists, your own files and New file. The fill-in 
 6. **The git clone is refused.** `cd` into your git clone and run `python3 tools/notebook.py --name alice --root . --port 8767`
    You should see: `notebook failed: this looks like the git clone (<your clone's full path> has .git); run on the working copy, e.g. ~/cptc-work`, exit 2. Then `cd ~/cptc-practice`.
 7. **The page.** In Firefox.
-   You should see: a left column with `Light / dark`, your files, `New`, `Checklists`, `Logs` and `Export`, and nothing else (no Compile yet). The colours follow your system's light or dark setting; `Light / dark` swaps them.
+   You should see: a left column with `Light / dark`, your files, `New`, `Checklists`, `Logs`, `Export` and `Compile`, and nothing else. The colours follow your system's light or dark setting; `Light / dark` swaps them.
 8. **Checklists and saved ticks.** `md5sum checklists/*.md > ../checklists.md5`. Click `Checklists`, open one, and tick a task. Reload the page and open the same checklist again.
    You should see: every `- [ ]` line as a checkbox and every other line as it is in the file; the tick is still there after the reload; `cat field-notes/alice/checklist-state.json` shows it as `true`. `md5sum -c ../checklists.md5` prints `OK` for every checklist: the checklists themselves never change. Then `rm ../checklists.md5`.
 9. **A broken tick file is refused, not overwritten.** `cp field-notes/alice/checklist-state.json ../state.bak`, then `echo '{oops' > field-notes/alice/checklist-state.json`. Open the checklist again and click a checkbox.
@@ -487,4 +485,4 @@ Answers for what is built today (see "What it does today" above).
 - **"Can logs with secrets leak through it?"** Our terminal logs (`~/cptc-logs/`, or `$LOGDIR`) can hold secrets: passwords, hashes and tokens typed or printed during the test. The Logs view shows them read-only, only on `127.0.0.1` with no outbound connections, and the notebook never writes into the log folder. Export leaves logs out unless "Include logs" is ticked (off by default), and copying a log into `evidence/` copies it unchanged, secrets included. Redact secrets before any log text goes into a finding or the report.
 - **"Does it run commands?"** No. Nothing in it starts another program, and a test reads its source to check that it doesn't import subprocess and never uses os.system, os.popen, exec or eval.
 - **"Can it change a teammate's files?"** No. Teammates' copies in `incoming/<name>/` are never listed, and every write refuses a path inside `incoming/` (rule R18) or the log folder. It also refuses a folder or file whose link points outside the working copy, and it refuses to start in the git clone.
-- **"What's built, and what isn't?"** Built: the checklists, the list of your own files, New file, the fill-in view with autosave, the log viewer and export (one zip). Not built yet: the compile button and the combined Markdown export. Until then, use `compile.py` from the terminal, as "Until then" above says.
+- **"What's built, and what isn't?"** Built: the checklists, the list of your own files, New file, the fill-in view with autosave, the log viewer, export (one zip, and a combined Markdown file as a fallback) and the compile button. The compile button runs draft mode only; for the `--final` check, use `compile.py` from the terminal.
