@@ -71,3 +71,4 @@ _staging/
 agents.md
 .maestri/
 .claude/settings.local.json
+.codex/
