@@ -4197,7 +4197,8 @@ class AppShellTests(ServerTestCase):
         # All seven POSTs (a tick, a new file, a save of a file, an export,
         # a log copied into evidence/, a compile, a combined export) send the token.
         self.assertEqual(page.count('"X-CPTC-Token": TOKEN'), 7)
-        self.assertEqual(page.count("fetch("), 11)
+        # Twelve requests in all; the GETs (Finding needs' among them) send none.
+        self.assertEqual(page.count("fetch("), 12)
         self.assertIn('fetch("/new-file", {\n      method: "POST",', page)
         self.assertIn('box.type = "checkbox";', page)
         # A box is locked while its save is pending and, if the save fails,
@@ -5762,8 +5763,10 @@ class CompilePageTests(ServerTestCase):
     def test_compile_button_opens_the_compile_view(self):
         page = self.get_page()
         # Through goTo(), so a dirty fill-in view's leave checks run first.
+        # The last Compile tab shown (N9-03), Compile until then.
         self.assertIn('document.getElementById("compile-button").addEventListener("click", function () {\n'
-                      "  goTo(showCompile);\n});", page)
+                      "  goTo(function () {\n    compileTab();\n  });\n});", page)
+        self.assertIn("var compileTab = showCompile;", page)
         self.assertEqual(page.count("compile-button"), 2)
 
     def test_the_request_is_a_post_with_the_token_and_no_fields(self):
@@ -5790,6 +5793,733 @@ class CompilePageTests(ServerTestCase):
                       '      status.appendChild(element("pre", text));', page)
         self.assertIn("return response.text().then(notRun);", page)
         self.assertIn('notRun("Not compiled: " + error);', page)
+
+
+class FindingNeedsPageTests(ServerTestCase):
+    """N9-03: the Finding needs tab in the Compile pane. Display safety is PageSafetyTests' (NT4-06)."""
+
+    def get_page(self):
+        response, page = self.send_full("GET", "/", self.good_host())
+        self.assertEqual(response.status, 200)
+        return page
+
+    def function_source(self, page, name):
+        """One page function's source, from its line to the next top-level function."""
+        start = page.index("\nfunction " + name + "(")
+        return page[start:page.index("\n}\n", start) + 3]
+
+    def test_it_is_a_tab_in_the_compile_pane_with_no_button_of_its_own(self):
+        page = self.get_page()
+        self.assertIn('[["Compile", showCompile], ["Finding needs", showFindingNeeds]].forEach', page)
+        self.assertIn("function showCompile() {\n  showCompileTabs(showCompile);", page)
+        self.assertIn("function showFindingNeeds() {\n  showCompileTabs(showFindingNeeds);", page)
+        # The left column keeps its buttons (NQ-01 A).
+        nav = page[page.index('<nav id="nav">'):page.index("</nav>")]
+        self.assertEqual(nav.count("<button"), 6)
+        self.assertNotIn("needs", nav.lower())
+
+    def test_the_button_comes_back_to_the_last_tab_shown(self):
+        page = self.get_page()
+        self.assertIn("function showCompileTabs(current) {\n  compileTab = current;", page)
+
+    def test_it_reads_with_a_get_and_never_compiles(self):
+        page = self.get_page()
+        needs = self.function_source(page, "showFindingNeeds")
+        self.assertIn('fetch("/finding-needs").then(function (response) {', needs)
+        self.assertNotIn("POST", needs)
+        self.assertNotIn("/compile", needs)
+        self.assertNotIn("TOKEN", needs)
+        # Read on every showing and on Refresh; no timer polls it (N9 default E).
+        self.assertIn('refresh.addEventListener("click", load);\n  load();\n}', needs)
+        self.assertNotIn("setInterval", page)
+
+    def test_old_results_go_and_a_late_answer_is_dropped(self):
+        needs = self.function_source(self.get_page(), "showFindingNeeds")
+        self.assertIn("refresh.disabled = true;\n    results.textContent = \"\";", needs)
+        self.assertIn("function stillShown() {\n      return main.contains(results);\n    }", needs)
+        # Both the answer and a failure check it before touching the pane.
+        self.assertEqual(needs.count("if (!stillShown()) {\n"), 2)
+        self.assertIn('notChecked("the notebook isn\'t answering: " + error);', needs)
+
+    def test_results_are_labelled_as_the_saved_files_on_disk(self):
+        page = self.get_page()
+        self.assertIn('"own checks on the saved file on disk. Changes not saved yet are not included. "', page)
+        self.assertIn('", from the saved files on disk."', page)
+
+    def test_it_says_what_ready_covers_and_what_it_leaves_out(self):
+        page = self.get_page()
+        for words in ["READY only means no markers are left, the six required fields ",
+                      "is not report-ready. Not checked here: duplicate finding IDs, the findings index and the ",
+                      "interactions timeline (use the Compile tab), report.md (run compile.py --final in a ",
+                      "terminal), and whether your evidence proves the finding (no tool checks that)."]:
+            with self.subTest(words=words):
+                self.assertIn(words, page)
+
+    def test_readiness_is_apart_from_the_problems_and_ready_with_problems_looks_different(self):
+        entry = self.function_source(self.get_page(), "needsEntry")
+        self.assertIn('if (entry.status === "READY" && entry.problems.length === 0) {', entry)
+        self.assertIn('} else if (entry.status === "READY") {', entry)
+        self.assertIn('readiness.textContent = "READY, but not report-ready: " + entry.problems.length +', entry)
+        self.assertIn('block.appendChild(element("p", "QA problems:"));', entry)
+        # A line only when compile gives one.
+        self.assertIn('var where = problem.line === null ? "" : "line " + problem.line + ": ";', entry)
+        self.assertIn('block.appendChild(element("pre", where + problem.message + " (" + problem.check + ")"));',
+                      entry)
+
+    def test_an_entry_with_an_error_shows_it_and_has_no_open_button(self):
+        entry = self.function_source(self.get_page(), "needsEntry")
+        error_branch = entry[entry.index("if (entry.error !== undefined) {"):entry.index("return block;")]
+        self.assertNotIn("goTo", error_branch)
+        self.assertNotIn("Open", error_branch)
+
+    def test_a_finding_opens_through_the_file_lists_way(self):
+        entry = self.function_source(self.get_page(), "needsEntry")
+        # goTo() first, so an open file's leave checks run; the same GET
+        # /file as the file list, so its refusals apply.
+        self.assertIn("goTo(function () {\n"
+                      '      getJson("/file?path=" + encodeURIComponent(entry.path), showFillIn);\n    });',
+                      entry)
+
+
+# The checks check_finding() runs on one finding; Finding needs shows only
+# these. The rest of QA_CHECKS look across files and stay with Compile.
+PER_FINDING_CHECKS = ["finding headings", "labelled lines", "severity", "required fields",
+                      "leftover markers", "older-style leftovers", "reproduction steps",
+                      "references", "CVSS version", "summary table"]
+
+
+class FindingNeedsTests(unittest.TestCase):
+    """N9-01 / NT9-01: what each own finding still needs, as compile.py sees it (Features 6)."""
+
+    def setUp(self):
+        self.root = support.make_worktree(self)
+
+    def write(self, relative_path, text):
+        support.write_fake_file(self.root, relative_path, text)
+
+    def write_finding(self, name, text):
+        self.write("findings/" + name, text)
+
+    def needs(self):
+        return notebook.finding_needs(self.root)
+
+    def entry(self, name):
+        """The one entry for findings/<name>."""
+        found = [entry for entry in self.needs()["findings"] if entry["path"] == "findings/" + name]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def messages(self, name):
+        """Each problem of findings/<name> as (check, line, message)."""
+        return [(problem["check"], problem["line"], problem["message"])
+                for problem in self.entry(name)["problems"]]
+
+    def assert_matches_compile(self):
+        """Every entry equals compile's own draft-mode run, read straight from collect_qa().
+
+        collect_qa() reads and checks every finding, as `compile.py` does,
+        without writing build/. Only top-level findings/ is compared, and
+        only the per-finding checks.
+        """
+        result = self.needs()
+        self.assertIsNone(result["error"])
+        collected = compile.collect_qa(self.root, None, False)
+        own = [finding for finding in collected["findings"] if finding["name"].startswith("findings/")]
+        self.assertEqual([entry["path"] for entry in result["findings"]],
+                         [finding["name"] for finding in own])
+        for entry, finding in zip(result["findings"], own):
+            with self.subTest(path=entry["path"]):
+                self.assertEqual(entry["id"], finding["heading"]["id"])
+                self.assertEqual(entry["title"], finding["heading"]["title"])
+                self.assertEqual(entry["status"], finding["status"])
+                self.assertEqual(entry["summary"], finding["summary"])
+                # compile's QA report lines for this file, in its check
+                # order; the checks across files are Compile's, not shown.
+                expected = []
+                for check_name in compile.QA_CHECKS:
+                    if check_name not in PER_FINDING_CHECKS:
+                        continue
+                    for problem in collected["checks"][check_name]:
+                        if problem[1] == entry["path"]:
+                            expected.append((check_name,) + problem)
+                shown = [(problem["check"], problem["level"], entry["path"],
+                          problem["line"], problem["message"]) for problem in entry["problems"]]
+                self.assertEqual(shown, expected)
+        return result
+
+    # Case 4: compile's own helpers do the reading and checking.
+
+    def test_it_uses_compiles_read_markdown_and_check_finding(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        real_read = compile.read_markdown
+        real_check = compile.check_finding
+        with mock.patch.object(compile, "read_markdown", side_effect=real_read) as read, \
+                mock.patch.object(compile, "check_finding", side_effect=real_check) as check:
+            entry = self.needs()["findings"][0]
+        read.assert_called_once_with((self.root / "findings" / "F-001-a.md").resolve())
+        # Draft mode, with the same root-relative name compile.py uses.
+        check.assert_called_once_with("findings/F-001-a.md", support.make_complete_finding(), False)
+        self.assertEqual(entry["status"], "READY")
+
+    def test_what_check_finding_says_is_what_is_shown(self):
+        self.write_finding("F-001-a.md", "anything\n")
+        fake = {"heading": {"id": "F-009", "title": "Made up"}, "status": "DRAFT",
+                "summary": "DRAFT: made up",
+                "checks": {"references": [("warning", "findings/F-001-a.md", 4, "no http")],
+                           "finding headings": [("warning", "findings/F-001-a.md", None, "x")]}}
+        with mock.patch.object(compile, "check_finding", return_value=fake):
+            entry = self.needs()["findings"][0]
+        # Problems come in QA_CHECKS order, not the dict's order.
+        self.assertEqual(entry, {
+            "path": "findings/F-001-a.md", "id": "F-009", "title": "Made up",
+            "status": "DRAFT", "summary": "DRAFT: made up",
+            "problems": [
+                {"check": "finding headings", "level": "warning", "line": None, "message": "x"},
+                {"check": "references", "level": "warning", "line": 4, "message": "no http"}]})
+
+    def test_notebook_imports_from_compile_only_one_way(self):
+        source = (support.TOOLS_DIR / "compile.py").read_text(encoding="utf-8")
+        self.assertNotIn("import notebook", source)
+        self.assertNotIn("from notebook", source)
+
+    # Case 5: complete and marker-filled findings.
+
+    def test_a_complete_finding_is_ready_with_no_problems(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        result = self.assert_matches_compile()
+        self.assertEqual(result["findings"][0]["summary"], "READY")
+        self.assertEqual(result["findings"][0]["problems"], [])
+
+    def test_a_marker_filled_finding_gives_compiles_counts_and_lines(self):
+        text = support.make_complete_finding()
+        text = text.replace("- **Status:** Exploited", "- **Status:** [[CHOOSE: Confirmed / Exploited]]")
+        text = text.replace("admin portal login form", "[[HOST]] login form [[HOST]]")
+        text = text.replace("#### Summary\n", "#### Summary\n[[NOTE: Say what\n1. and why]]\n")
+        text = text.replace("#### Business impact\n", "#### Business impact\n[[IMPACT\n")
+        text = text.replace("Repeat step 2", "Run `if [[ -f x ]]; then echo; fi` then repeat step 2")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        entry = self.entry("F-001-a.md")
+        self.assertEqual(entry["status"], "DRAFT")
+        # CHOOSE, HOST twice, the two-line NOTE and the unclosed [[IMPACT;
+        # Status holds only a marker, so it is the missing field.
+        self.assertEqual(entry["summary"], "DRAFT: 5 unresolved markers, 1 missing fields")
+        lines = text.split("\n")
+        status = lines.index("- **Status:** [[CHOOSE: Confirmed / Exploited]]") + 1
+        host = [number for number, line in enumerate(lines, 1) if "[[HOST]]" in line][0]
+        note = lines.index("[[NOTE: Say what") + 1
+        impact = lines.index("[[IMPACT") + 1
+        markers = [(line, message) for check, line, message in self.messages("F-001-a.md")
+                   if check == "leftover markers"]
+        # The bash [[ -f x ]] test is not a marker.
+        self.assertEqual(markers, [
+            (status, "leftover marker [[CHOOSE"), (note, "leftover marker [[NOTE"),
+            (impact, "leftover marker [[IMPACT"), (host, "leftover marker [[HOST"),
+            (host, "leftover marker [[HOST")])
+
+    # Case 6: missing and empty required fields.
+
+    def test_a_missing_labelled_line_has_no_line_number(self):
+        text = support.make_complete_finding().replace("- **Status:** Exploited\n", "")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        self.assertEqual(self.entry("F-001-a.md")["summary"],
+                         "DRAFT: 0 unresolved markers, 1 missing fields")
+        problems = self.messages("F-001-a.md")
+        self.assertEqual([problem for problem in problems if problem[1] is None],
+                         [("labelled lines", None, "missing labelled line '- **Status:**'")])
+        # Not reported a second time by the required-fields check.
+        self.assertNotIn("required fields", [problem[0] for problem in problems])
+
+    def test_an_empty_labelled_line_is_reported_at_its_line(self):
+        text = support.make_complete_finding().replace("- **Status:** Exploited", "- **Status:**")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        line = text.split("\n").index("- **Status:**") + 1
+        self.assertEqual(self.messages("F-001-a.md"),
+                         [("required fields", line, "Status has no value")])
+
+    def test_punctuation_only_is_missing_and_the_references_remnant_is_present(self):
+        text = support.make_complete_finding()
+        text = text.replace("- **Why this severity:** We logged", "- **Why this severity:** ()\n- **Was:** We logged")
+        text = text.replace("CWE-1392, ATT&CK T1078.001, https://example.invalid/advisories/default-credentials",
+                            "CWE-, ATT&CK ,")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        # Only Why this severity is missing; References is present but has no link.
+        self.assertEqual(self.entry("F-001-a.md")["summary"],
+                         "DRAFT: 0 unresolved markers, 1 missing fields")
+        checks = [problem[0] for problem in self.messages("F-001-a.md")]
+        self.assertEqual(checks, ["required fields", "references"])
+
+    def test_a_unicode_letter_counts_as_a_value(self):
+        text = support.make_complete_finding().replace("- **Status:** Exploited", "- **Status:** É")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        self.assertEqual(self.entry("F-001-a.md")["summary"], "READY")
+
+    # Case 7: severity word, title and heading identity.
+
+    def test_lowercase_severity_is_a_draft_with_zero_counts(self):
+        text = support.make_complete_finding().replace("- **Severity:** Critical", "- **Severity:** high")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        self.assertEqual(self.entry("F-001-a.md")["summary"],
+                         "DRAFT: 0 unresolved markers, 0 missing fields, no severity word")
+
+    def test_a_blank_title_is_a_draft_with_zero_counts(self):
+        text = support.make_complete_finding().replace("### F-001: Default admin password on web01",
+                                                       "### F-001: ")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        entry = self.entry("F-001-a.md")
+        self.assertEqual(entry["summary"], "DRAFT: 0 unresolved markers, 0 missing fields, no title")
+        self.assertEqual(entry["title"], "")
+        self.assertEqual(self.messages("F-001-a.md"), [("finding headings", 1, "heading has no title text")])
+
+    def test_an_unfilled_heading_id_uses_the_filename_id(self):
+        text = support.make_complete_finding().replace("### F-001:", "### [[FINDING_ID]]:")
+        self.write_finding("F-007-a.md", text)
+        self.assert_matches_compile()
+        entry = self.entry("F-007-a.md")
+        self.assertEqual(entry["id"], "F-007")
+        self.assertEqual(entry["summary"], "DRAFT: 1 unresolved markers, 0 missing fields")
+
+    def test_no_heading_and_no_filename_id_shows_no_id_and_no_title(self):
+        self.write_finding("F-draft.md", "just some notes\n")
+        self.assert_matches_compile()
+        entry = self.entry("F-draft.md")
+        self.assertIsNone(entry["id"])
+        self.assertIsNone(entry["title"])
+
+    def test_a_mismatched_id_and_wrong_heading_level_keep_compiles_problems(self):
+        text = support.make_complete_finding().replace("### F-001:", "## F-002:")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        self.assertEqual(self.entry("F-001-a.md")["id"], "F-002")
+        self.assertEqual(self.messages("F-001-a.md"), [
+            ("finding headings", 1, "title is a ## heading, not ###"),
+            ("finding headings", 1, "heading ID F-002 does not match filename ID F-001")])
+
+    # Case 8: READY is not report-ready.
+
+    def test_a_ready_finding_with_short_reproduction_still_shows_it(self):
+        text = support.make_complete_finding().replace(
+            "   Expected: HTTP/1.1 200 OK and the admin dashboard listing all accounts\n", "")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        entry = self.entry("F-001-a.md")
+        self.assertEqual(entry["status"], "READY")
+        self.assertEqual([problem[0] for problem in self.messages("F-001-a.md")], ["reproduction steps"])
+
+    def test_pasted_ip_first_output_is_not_a_step(self):
+        text = support.make_complete_finding().replace(
+            "   Expected: HTTP/1.1 200 OK and the admin portal login form\n",
+            "   Expected: HTTP/1.1 200 OK and the admin portal login form\n"
+            "   10.0.0.1 web01\n   10.0.0.2. dc01\n")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        self.assertEqual(self.entry("F-001-a.md")["problems"], [])
+
+    # Case 9: CVSS and references, as compile checks them.
+
+    def test_cvss_vectors_and_references(self):
+        complete = support.make_complete_finding()
+        vector = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+        self.write_finding("F-001-good.md", complete)
+        self.write_finding("F-002-reordered.md", complete.replace(
+            vector, "CVSS:3.1/AC:L/AV:N/PR:N/UI:N/S:U/C:H/I:H/A:H").replace("F-001", "F-002"))
+        self.write_finding("F-003-unfilled.md", complete.replace(
+            vector, "[[CVSS_VECTOR]]").replace("F-001", "F-003"))
+        self.write_finding("F-004-note-link.md", complete.replace(
+            "https://example.invalid/advisories/default-credentials",
+            "[[NOTE: see https://example.invalid/x]]").replace("F-001", "F-004"))
+        self.assert_matches_compile()
+        self.assertEqual(self.messages("F-001-good.md"), [])
+        self.assertEqual([problem[0] for problem in self.messages("F-002-reordered.md")], ["CVSS version"])
+        # The marker check reports an unfilled vector; the CVSS check skips it.
+        self.assertEqual([problem[0] for problem in self.messages("F-003-unfilled.md")], ["leftover markers"])
+        self.assertEqual([problem[0] for problem in self.messages("F-004-note-link.md")],
+                         ["leftover markers", "references"])
+
+    # Case 10: older-style leftovers and table pipes.
+
+    def test_an_older_todo_in_prose_warns_on_a_ready_finding_but_not_in_code(self):
+        text = support.make_complete_finding()
+        text = text.replace("#### Business impact\n", "#### Business impact\nTODO ask about prices\n")
+        text = text.replace("2026-11-07 10:14:52 POST", "2026-11-07 10:14:52 TODO POST")
+        text = text.replace("`curl -i http://10.0.0.1/login`", "`curl -i http://10.0.0.1/login?TODO`")
+        self.write_finding("F-001-a.md", text)
+        self.assert_matches_compile()
+        entry = self.entry("F-001-a.md")
+        self.assertEqual(entry["status"], "READY")
+        line = text.split("\n").index("TODO ask about prices") + 1
+        self.assertEqual(self.messages("F-001-a.md"),
+                         [("older-style leftovers", line, "older-style leftover TODO")])
+
+    def test_pipes_in_summary_cells_are_reported_and_escaped_ones_are_not(self):
+        complete = support.make_complete_finding()
+        self.write_finding("F-001-pipes.md", complete.replace(
+            "Default admin password on web01", "Admin | web01").replace(
+            "- **Status:** Exploited", "- **Status:** Exploited | Fixed").replace(
+            "admin\n- **Discovered", "admin | root\n- **Discovered"))
+        self.write_finding("F-002-escaped.md", complete.replace("F-001", "F-002").replace(
+            "Default admin password on web01", "Admin \\| web01"))
+        self.assert_matches_compile()
+        self.assertEqual([problem[0] for problem in self.messages("F-001-pipes.md")], ["summary table"] * 3)
+        self.assertEqual(self.messages("F-002-escaped.md"), [])
+
+    # Case 11: line endings, BOM and encoding.
+
+    def test_bom_and_crlf_give_compiles_results_and_stay_unchanged(self):
+        lf = support.make_complete_finding().replace("- **Status:** Exploited", "- **Status:**")
+        crlf = lf.replace("\n", "\r\n").encode("utf-8")
+        # All F-001, so the filename and heading IDs agree.
+        files = {"F-001-lf.md": lf.encode("utf-8"), "F-001-bom.md": b"\xef\xbb\xbf" + lf.encode("utf-8"),
+                 "F-001-crlf.md": crlf, "F-001-both.md": b"\xef\xbb\xbf" + crlf}
+        (self.root / "findings").mkdir()
+        for name, data in files.items():
+            (self.root / "findings" / name).write_bytes(data)
+        before = file_bytes(self.root)
+        self.assert_matches_compile()
+        # The same line and reasons whatever the BOM or line ending.
+        for name in files:
+            with self.subTest(name=name):
+                self.assertEqual(self.entry(name)["id"], "F-001")
+                self.assertEqual(self.messages(name), self.messages("F-001-lf.md"))
+                self.assertEqual(self.entry(name)["summary"], "DRAFT: 0 unresolved markers, 1 missing fields")
+        self.assertEqual(file_bytes(self.root), before)
+
+    def test_a_file_that_is_not_utf8_is_an_error_entry_beside_the_others(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        (self.root / "findings" / "F-002-cafe.md").write_bytes("Café\n".encode("cp1252"))
+        before = file_bytes(self.root)
+        result = self.needs()
+        self.assertIsNone(result["error"])
+        self.assertEqual([entry["path"] for entry in result["findings"]],
+                         ["findings/F-001-a.md", "findings/F-002-cafe.md"])
+        self.assertEqual(result["findings"][0]["status"], "READY")
+        error = result["findings"][1]
+        self.assertEqual(sorted(error), ["error", "path"])
+        self.assertIn("F-002-cafe.md is not UTF-8 text (", error["error"])
+        self.assertEqual(file_bytes(self.root), before)
+
+    def test_a_file_name_that_is_not_utf8_is_an_error_entry(self):
+        # Linux allows such a name (the Mac's disk doesn't); listdir() gives
+        # it with a stand-in for the bad byte, as here.
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        real_listdir = os.listdir
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: real_listdir(folder) + ["F-003-\udcff.md"]):
+            result = self.needs()
+        self.assertEqual(result["findings"][1],
+                         {"path": "'findings/F-003-\\udcff.md'", "error": "file name isn't UTF-8"})
+        # Sendable as JSON, as the route will send it.
+        json.dumps(result).encode("utf-8")
+
+    # Case 12: which files are listed, and their order.
+
+    def test_only_top_level_own_findings_are_listed(self):
+        finding = support.make_complete_finding()
+        self.write_finding("F-001-a.md", finding)
+        for relative_path in ["incoming/bob/findings/F-002-b.md", "findings/sub/F-003-deep.md",
+                              "findings/README.md", "findings/f-004-lowercase.md", "findings/F-005-a.txt",
+                              "findings-library/F-006-lib.md", "report.md", "field-notes/alice/F-007-note.md",
+                              "F-008-root.md", "templates/finding.md"]:
+            self.write(relative_path, finding)
+        self.assertEqual([entry["path"] for entry in self.needs()["findings"]], ["findings/F-001-a.md"])
+
+    def test_two_files_with_one_id_are_two_entries_in_name_order(self):
+        self.write_finding("F-002-b.md", support.make_complete_finding("F-002"))
+        for name in ["F-001-z.md", "F-001-a.md"]:
+            self.write_finding(name, support.make_complete_finding())
+        real_listdir = os.listdir
+        # The Mac's disk lists names in order; reversed proves the code sorts.
+        with mock.patch.object(notebook.os, "listdir",
+                               lambda folder: sorted(real_listdir(folder), reverse=True)):
+            result = self.needs()
+        self.assertEqual([entry["path"] for entry in result["findings"]],
+                         ["findings/F-001-a.md", "findings/F-001-z.md", "findings/F-002-b.md"])
+        # The duplicate ID is Compile's check, not shown here.
+        self.assertEqual([(entry["id"], entry["problems"]) for entry in result["findings"]],
+                         [("F-001", []), ("F-001", []), ("F-002", [])])
+
+    # Case 13: empty, missing and live.
+
+    def test_no_findings_folder_and_an_empty_one_give_no_findings(self):
+        self.assertEqual(self.needs(), {"findings": [], "error": None})
+        (self.root / "findings").mkdir()
+        self.assertEqual(self.needs(), {"findings": [], "error": None})
+
+    def test_a_file_in_place_of_the_folder_is_an_error(self):
+        # N9 default C: not "no findings", which would hide a mistake.
+        self.write("findings", "not a folder\n")
+        result = self.needs()
+        self.assertEqual(result["findings"], [])
+        self.assertIn("Not a directory", result["error"])
+
+    def test_each_read_sees_the_disk_as_it_is_now(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding().replace("Critical", "[[SEVERITY]]"))
+        self.assertEqual(self.entry("F-001-a.md")["status"], "DRAFT")
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        self.write_finding("F-002-b.md", support.make_complete_finding("F-002"))
+        self.assertEqual([entry["status"] for entry in self.needs()["findings"]], ["READY", "READY"])
+        (self.root / "findings" / "F-001-a.md").unlink()
+        self.assertEqual([entry["path"] for entry in self.needs()["findings"]], ["findings/F-002-b.md"])
+
+    # Case 14: unreadable files and folders, and things that aren't files.
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a file with no permissions")
+    def test_an_unreadable_file_is_an_error_entry_and_the_rest_still_show(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        self.write_finding("F-002-b.md", support.make_complete_finding("F-002"))
+        locked = self.root / "findings" / "F-001-a.md"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o644)
+        result = self.needs()
+        self.assertEqual(sorted(result["findings"][0]), ["error", "path"])
+        self.assertEqual(result["findings"][0]["path"], "findings/F-001-a.md")
+        self.assertIn("Permission denied", result["findings"][0]["error"])
+        self.assertEqual(result["findings"][1]["status"], "READY")
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a folder with no permissions")
+    def test_an_unreadable_findings_folder_is_an_error_not_an_empty_list(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        locked = self.root / "findings"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o755)
+        result = self.needs()
+        self.assertEqual(result["findings"], [])
+        self.assertIn("Permission denied", result["error"])
+
+    def test_folders_fifos_and_dangling_links_named_like_findings_are_skipped(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        (self.root / "findings" / "F-002-folder.md").mkdir()
+        os.mkfifo(str(self.root / "findings" / "F-003-fifo.md"))
+        (self.root / "findings" / "F-004-gone.md").symlink_to(self.root / "findings" / "missing.md")
+        with mock.patch.object(compile, "read_markdown", side_effect=compile.read_markdown) as read:
+            result = self.needs()
+        self.assertEqual([entry["path"] for entry in result["findings"]], ["findings/F-001-a.md"])
+        # Only the one real file was opened, so the FIFO can't make it wait.
+        self.assertEqual(read.call_count, 1)
+
+    def test_a_finding_that_links_to_itself_is_skipped_and_the_rest_still_show(self):
+        # Python 3.9's resolve() raises RuntimeError for a loop; newer ones
+        # don't. Either way the good finding still shows (run on 3.9 in CI).
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        loop = self.root / "findings" / "F-002-loop.md"
+        loop.symlink_to(loop)
+        result = self.needs()
+        self.assertEqual([(entry["path"], entry["status"]) for entry in result["findings"]],
+                         [("findings/F-001-a.md", "READY")])
+        self.assertIsNone(result["error"])
+
+    def test_a_findings_folder_that_links_to_itself_is_an_error(self):
+        loop = self.root / "findings"
+        loop.symlink_to(loop)
+        result = self.needs()
+        self.assertEqual(result["findings"], [])
+        self.assertIsNotNone(result["error"])
+        self.assertIn("findings", result["error"])
+
+    # Case 15: links.
+
+    def test_a_findings_folder_linked_outside_is_refused_unread(self):
+        outside = support.make_worktree(self, {"F-001-secret.md": "outside\n"})
+        (self.root / "findings").symlink_to(outside)
+        with mock.patch.object(compile, "read_markdown") as read:
+            result = self.needs()
+        self.assertEqual(result["findings"], [])
+        self.assertIn("findings", result["error"])
+        self.assertIn("outside", result["error"])
+        read.assert_not_called()
+
+    def test_a_finding_linked_outside_is_an_error_entry_unread(self):
+        outside = support.make_worktree(self, {"secret.md": "outside secret\n"})
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        (self.root / "findings" / "F-002-link.md").symlink_to(outside / "secret.md")
+        real_read = compile.read_markdown
+        with mock.patch.object(compile, "read_markdown", side_effect=real_read) as read:
+            result = self.needs()
+        refused = result["findings"][1]
+        self.assertEqual(refused["path"], "findings/F-002-link.md")
+        self.assertIn("findings/F-002-link.md", refused["error"])
+        self.assertNotIn("outside secret", json.dumps(result))
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual(result["findings"][0]["status"], "READY")
+
+    def test_in_root_links_count_by_their_findings_path(self):
+        finding = support.make_complete_finding("F-002")
+        self.write("incoming/bob/findings/F-002-b.md", finding)
+        self.write("shared/F-003-c.md", support.make_complete_finding("F-003"))
+        (self.root / "findings").mkdir()
+        (self.root / "findings" / "F-002-b.md").symlink_to(self.root / "incoming" / "bob" / "findings" / "F-002-b.md")
+        (self.root / "findings" / "F-003-c.md").symlink_to(self.root / "shared" / "F-003-c.md")
+        self.assertEqual([(entry["path"], entry["status"]) for entry in self.needs()["findings"]],
+                         [("findings/F-002-b.md", "READY"), ("findings/F-003-c.md", "READY")])
+
+    def test_an_in_root_linked_findings_folder_is_followed(self):
+        self.write("shared/F-001-a.md", support.make_complete_finding())
+        (self.root / "findings").symlink_to(self.root / "shared")
+        self.assertEqual([entry["path"] for entry in self.needs()["findings"]], ["findings/F-001-a.md"])
+
+    # Case 16: viewing never compiles and changes nothing.
+
+    def test_viewing_never_compiles_or_writes(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        self.write_finding("F-002-b.md", "### F-002: [[TITLE]]\n")
+        self.write("incoming/bob/findings/F-003-c.md", "bob\n")
+        self.write("report.md", "# Report [[CLIENT]]\n")
+        self.write("field-notes/alice/checklist-state.json", "{}\n")
+        self.write("tracker/findings-index.csv", "finding_id\nF-001\n")
+        before = file_bytes(self.root)
+        with mock.patch.object(compile, "run", side_effect=AssertionError("compile.run() called")), \
+                mock.patch.object(compile, "write_outputs", side_effect=AssertionError("write_outputs() called")):
+            self.needs()
+        self.assertEqual(file_bytes(self.root), before)
+        self.assertFalse((self.root / "build").exists())
+
+    def test_viewing_leaves_existing_build_files_untouched(self):
+        self.write_finding("F-001-a.md", support.make_complete_finding())
+        for file_name in compile.OUTPUT_FILES:
+            self.write("build/" + file_name, "earlier " + file_name + "\n")
+        build = self.root / "build"
+        before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in build.iterdir()}
+        self.needs()
+        after = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in build.iterdir()}
+        self.assertEqual(after, before)
+
+
+# A finding title and file name made of HTML and quotes, to show both come back as data.
+HOSTILE_TITLE = "<script>alert(1)</script> <img src=x onerror=\"alert('x')\"> & \"quoted\""
+HOSTILE_NAME = "F-002-<b>&\"x\".md"
+
+
+class FindingNeedsRouteTests(ServerTestCase):
+    """N9-02 / NT9-02: GET /finding-needs (Constraints 4, 8, 9)."""
+
+    def setUp(self):
+        super().setUp()
+        self.work = support.make_worktree(self, {"findings/F-001-a.md": support.make_complete_finding()})
+        self.server.settings["root"] = self.work.resolve()
+
+    def get(self, path="/finding-needs", host=None):
+        """GET with no token; return (status, content type, text). Every answer has the safety headers."""
+        response, text = self.send_full("GET", path, self.good_host() if host is None else host)
+        self.assert_safe_headers(response)
+        return response.status, response.getheader("Content-Type"), text
+
+    def get_json(self, path="/finding-needs"):
+        status, content_type, text = self.get(path)
+        self.assertEqual((status, content_type), (200, "application/json"), text)
+        return json.loads(text)
+
+    def snapshot(self):
+        return tree(self.work), tree(self.logdir)
+
+    # Case 17: it answers what the helper says, live, with no token.
+
+    def test_a_good_get_matches_the_helper_and_needs_no_token(self):
+        self.assertEqual(self.get_json(), notebook.finding_needs(self.work.resolve()))
+        self.assertEqual(self.get_json()["findings"][0]["status"], "READY")
+
+    def test_it_reads_the_disk_on_every_request(self):
+        self.assertEqual(len(self.get_json()["findings"]), 1)
+        support.write_fake_file(self.work, "findings/F-002-b.md", "### F-002: [[TITLE]]\n")
+        result = self.get_json()
+        self.assertEqual([entry["status"] for entry in result["findings"]], ["READY", "DRAFT"])
+        self.assertEqual(result, notebook.finding_needs(self.work.resolve()))
+
+    # Case 18: a wrong or missing Host reaches nothing.
+
+    def test_a_wrong_or_missing_host_is_refused_before_the_helper(self):
+        before = self.snapshot()
+        for host in ["evil.example:" + str(self.port), "localhost:" + str(self.port), "127.0.0.1", []]:
+            with self.subTest(host=host), \
+                    mock.patch.object(notebook, "finding_needs", side_effect=AssertionError("read")) as helper:
+                status, content_type, text = self.get(host=host)
+                helper.assert_not_called()
+                self.assertEqual((status, content_type, text),
+                                 (403, "text/plain; charset=utf-8", "refused: use http://127.0.0.1:" + str(self.port)))
+        self.assertEqual(self.snapshot(), before)
+
+    # Case 19: no selector, so a query can't widen the scope.
+
+    def test_a_query_is_ignored_and_cannot_widen_the_scope(self):
+        support.write_fake_file(self.work, "incoming/bob/findings/F-003-bob.md", support.make_complete_finding("F-003"))
+        outside = support.make_worktree(self, {"F-009-secret.md": "outside secret\n"})
+        plain = self.get_json()
+        for query in ["?path=../../etc/passwd", "?path=" + quote(str(outside)), "?path=incoming/bob/findings",
+                      "?path=findings%00x", "?folder=incoming&scope=all", "?%00"]:
+            with self.subTest(query=query):
+                self.assertEqual(self.get_json("/finding-needs" + query), plain)
+        self.assertEqual([entry["path"] for entry in plain["findings"]], ["findings/F-001-a.md"])
+
+    def test_an_outside_linked_findings_folder_gives_a_readable_error_not_its_files(self):
+        outside = support.make_worktree(self, {"F-009-secret.md": "### F-009: outside secret\n"})
+        shutil.move(str(self.work / "findings"), str(self.work / "old-findings"))
+        (self.work / "findings").symlink_to(outside)
+        status, content_type, text = self.get()
+        self.assertEqual((status, content_type), (200, "application/json"))
+        result = json.loads(text)
+        self.assertEqual(result["findings"], [])
+        self.assertIn("outside", result["error"])
+        self.assertNotIn("outside secret", text)
+
+    def test_post_has_no_route_and_changes_nothing(self):
+        before = self.snapshot()
+        status, body = self.send("POST", "/finding-needs", self.good_host(), self.server.token)
+        self.assertEqual((status, body), (404, "not found: /finding-needs"))
+        self.assertEqual(self.snapshot(), before)
+
+    # Case 20: headers on good, empty and error answers.
+
+    def test_good_empty_and_error_answers_are_json_with_the_safety_headers(self):
+        cases = {"good": lambda: None,
+                 "empty": lambda: shutil.move(str(self.work / "findings"), str(self.work / "gone")),
+                 "error": lambda: support.write_fake_file(self.work, "findings", "a file, not a folder\n")}
+        for case, prepare in cases.items():
+            with self.subTest(case=case):
+                prepare()
+                # get() checks nosniff, DENY and no CORS header on every answer.
+                status, content_type, text = self.get()
+                self.assertEqual((status, content_type), (200, "application/json"))
+                result = json.loads(text)
+                self.assertEqual(result["error"] is None, case != "error")
+
+    # Case 21: hostile text is data.
+
+    def test_hostile_title_name_and_problem_text_come_back_exactly_as_json_data(self):
+        text = support.make_complete_finding("F-002", HOSTILE_TITLE + " | pipe")
+        (self.work / "findings" / HOSTILE_NAME).write_text(text, encoding="utf-8")
+        status, content_type, body = self.get()
+        self.assertEqual((status, content_type), (200, "application/json"))
+        entry = json.loads(body)["findings"][1]
+        self.assertEqual(entry["path"], "findings/" + HOSTILE_NAME)
+        self.assertEqual(entry["title"], HOSTILE_TITLE + " | pipe")
+        self.assertEqual([problem["check"] for problem in entry["problems"]], ["summary table"])
+        self.assertEqual(entry, notebook.finding_needs(self.work.resolve())["findings"][1])
+
+    # Case 22: no read compiles or writes.
+
+    def test_good_empty_and_failed_reads_never_compile_or_write(self):
+        support.write_fake_file(self.work, "report.md", "# Report [[CLIENT]]\n")
+        support.write_fake_file(self.work, "incoming/bob/findings/F-003-b.md", "bob\n")
+        support.write_fake_file(self.work, "field-notes/alice/checklist-state.json", "{}\n")
+        support.write_fake_file(self.logdir, "alice_20261107T101500Z.log", "fake log\n")
+        with mock.patch.object(compile, "run", side_effect=AssertionError("compile.run() called")), \
+                mock.patch.object(compile, "write_outputs", side_effect=AssertionError("write_outputs() called")):
+            for case in ["good", "query", "empty", "error"]:
+                with self.subTest(case=case):
+                    if case == "empty":
+                        shutil.move(str(self.work / "findings"), str(self.work / "gone"))
+                    if case == "error":
+                        support.write_fake_file(self.work, "findings", "a file, not a folder\n")
+                    before = self.snapshot()
+                    path = "/finding-needs?path=../report.md" if case == "query" else "/finding-needs"
+                    self.assertEqual(self.get(path)[0], 200)
+                    self.assertEqual(self.snapshot(), before)
+        self.assertFalse((self.work / "build").exists())
 
 
 COMBINED_NAME_RE = re.compile(r"^cptc-combined-alice-\d{8}T\d{6}\.md$")
@@ -7583,6 +8313,10 @@ class LookTests(ServerTestCase):
             "      markError(copied);\n      copied.textContent = cantCopy;\n    });",
             '      markError(messages);\n      messages.appendChild(element("p", "Not saved: " + text));',
             "      run.disabled = false;\n      markError(status);",  # Compile
+            # Finding needs: a failed read, findings/ itself, one bad file.
+            '      markError(results.appendChild(element("p", "Not checked: " + text)));',
+            '    markError(results.appendChild(element("p", "Can\'t read findings/: " + data.error)));',
+            '    markError(block.appendChild(element("p", "Not checked: " + entry.error)));',
             # The combined file's Copy, the same two as the copy-command button.
             "      markError(copied);\n      copied.textContent = cantCopy;\n      return;",
             "      markError(copied);\n      copied.textContent = cantCopy;\n    });",
@@ -7598,6 +8332,7 @@ class LookTests(ServerTestCase):
             '          markOk(savedLine);\n          savedLine.textContent = "saved at "',
             '      markOk(copied);\n      copied.textContent = "Copied.";',  # the combined file's Copy
             "        } else {\n          markOk(status);\n        }",  # Compile, no problem found
+            '    readiness.textContent = "READY, and no problems in these checks.";\n    markOk(readiness);',
         ]
         # Warnings and notes are amber (F2 B); the fill-in status and "not
         # saved yet" stay plain (test below).
@@ -7618,6 +8353,9 @@ class LookTests(ServerTestCase):
             # A combined file with nothing in it, or with .md files left out.
             '          markWarning(status);\n          status.appendChild(element("p", "Nothing to combine',
             "        if (result.left_out.length > 0) {\n          /* Made, but some .md files aren't in it: amber",
+            # Finding needs: READY with problems, and DRAFT.
+            '      " problems below.";\n    markWarning(readiness);',
+            "    readiness.textContent = entry.summary;\n    markWarning(readiness);",
         ]
         for mark in errors + oks + warnings:
             with self.subTest(mark=mark):
@@ -7662,7 +8400,8 @@ class LookTests(ServerTestCase):
         # and nothing reads one back.
         _, script = self.get_style_and_script()
         self.assertEqual(set(re.findall(r'className = "([^"]*)"', script)),
-                         {"selected", "message", "message error", "message ok", "message warning", "log-text"})
+                         {"selected", "message", "message error", "message ok", "message warning", "log-text",
+                          "tabs"})
         self.assertEqual(script.count("className"), script.count('className = "'))
         self.assertNotIn("classList", script)
         self.assertNotIn("querySelectorAll", script)
@@ -7755,7 +8494,7 @@ class RouteMatrixTests(NtxServerTestCase):
     # Written out, not read from the route tables, so a route added without
     # being listed here fails test_the_route_tables_are_exactly_these.
     GETS = ["/", "/checklists", "/checklist", "/checklist-view", "/files", "/new-data",
-            "/file", "/logs", "/log"]
+            "/file", "/logs", "/log", "/finding-needs"]
     POSTS = ["/checklist-state", "/new-file", "/file", "/export", "/evidence", "/compile",
              "/combined-export"]
 
@@ -7772,6 +8511,7 @@ class RouteMatrixTests(NtxServerTestCase):
             ("GET", "/file?path=findings/F-001-matrix.md", None),
             ("GET", "/logs", None),
             ("GET", "/log?path=" + NTX_LOG, None),
+            ("GET", "/finding-needs", None),
             ("POST", "/checklist-state", {"key": self.tick_key(), "checked": True}),
             ("POST", "/new-file", {"type": "Note", "title": "Matrix note", "nnn": None, "library": None}),
             ("POST", "/file", {"path": "findings/F-001-matrix.md", "text": text, "base": text, "fields": []}),
@@ -7984,6 +8724,48 @@ class FakeUserWorkflowTests(NtxServerTestCase):
                          set(NTX_VALUES))
         return self.ok_json("POST", "/file", {"path": path, "text": text, "base": opened["text"],
                                               "fields": fields})
+
+    def needs_entry(self, path):
+        """GET /finding-needs's entry for path, after checking it equals compile's own result."""
+        result = self.ok_json("GET", "/finding-needs")
+        self.assertIsNone(result["error"])
+        entry = [entry for entry in result["findings"] if entry["path"] == path][0]
+        finding = [finding for finding in compile.collect_qa(self.work, None, False)["findings"]
+                   if finding["name"] == path][0]
+        self.assertEqual((entry["status"], entry["summary"]), (finding["status"], finding["summary"]))
+        compiled = [(level, line, message) for check_name, problems in finding["checks"].items()
+                    for level, _, line, message in problems]
+        self.assertEqual(sorted((problem["level"], problem["line"] or 0, problem["message"])
+                                for problem in entry["problems"]),
+                         sorted((level, line or 0, message) for level, line, message in compiled))
+        return entry
+
+    def test_finding_needs_follows_a_finding_from_new_to_ready(self):
+        # NT9-03: unfinished -> save -> refreshed needs -> READY with no QA lines.
+        before_build = (self.work / "build").exists()
+        created = self.ok_json("POST", "/new-file", {"type": "Finding", "title": "Default admin password on web01",
+                                                     "nnn": "001", "library": None})
+        path = created["path"]
+        unfinished = self.needs_entry(path)
+        self.assertEqual(unfinished["status"], "DRAFT")
+        self.assertNotEqual(unfinished["problems"], [])
+        saved = self.fill_every_box(path)
+        done = self.needs_entry(path)
+        self.assertEqual((done["status"], done["summary"], done["problems"]), ("READY", "READY", []))
+        self.assertEqual(done["id"], "F-001")
+        # Viewing never compiled: build/ is as it was.
+        self.assertEqual((self.work / "build").exists(), before_build)
+
+        # A READY finding whose last Expected: line is lost still shows the problem.
+        lines = saved["text"].split("\n")
+        expected = [number for number, line in enumerate(lines) if line.strip().startswith("Expected:")]
+        del lines[expected[-1]]
+        short = "\n".join(lines)
+        self.ok_json("POST", "/file", {"path": path, "text": short, "base": saved["text"], "fields": []})
+        warned = self.needs_entry(path)
+        self.assertEqual(warned["status"], "READY")
+        self.assertEqual([problem["check"] for problem in warned["problems"]], ["reproduction steps"])
+        self.assert_read_only_folders_unchanged()
 
     def test_a_fake_testers_day(self):
         # Open the app.

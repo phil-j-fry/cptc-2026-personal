@@ -1949,6 +1949,120 @@ def run_compile(handler):
     send_json(handler, 200, {"exit_code": exit_code, "qa": qa_text, "lines": lines})
 
 
+# Finding needs (Features 6): the person's own findings, the only folder
+# looked at. incoming/ is left out (NQ-02 A).
+NEEDS_FOLDER = "findings"
+
+
+def needs_file_names(root):
+    """Return the F-*.md names directly in findings/, sorted.
+
+    Only names are looked at here. Raises RootError if findings/ points
+    outside the root or is a link loop, and OSError if it can't be listed
+    (a file in its place included); a missing folder gives nothing.
+    """
+    try:
+        resolved = readable_path(root, NEEDS_FOLDER)
+    except RuntimeError as error:
+        # Python 3.9's resolve() raises this for a link loop; newer Pythons
+        # resolve it and listdir() raises OSError instead. Both are errors.
+        raise compile.RootError("findings/ can't be used: " + str(error))
+    try:
+        # listdir(), not glob(): glob() treats a folder it may not read as
+        # empty, which would show "no findings" instead of the error.
+        names = os.listdir(str(resolved))
+    except FileNotFoundError:
+        # No findings/ yet: no findings. A file in its place is an error
+        # instead (N9 default C), so it isn't mistaken for "no findings".
+        return []
+    # The same names compile.py's glob("F-*.md") picks; listdir() lists in
+    # whatever order the disk gives.
+    return sorted(name for name in names if name.startswith("F-") and name.endswith(".md"))
+
+
+def needs_problems(checks):
+    """Return check_finding()'s problems as dicts, in the QA report's check order."""
+    problems = []
+    for check_name in compile.QA_CHECKS:
+        # check_finding() has only the per-finding checks; the checks across
+        # files (duplicate IDs, index, timeline) are Compile's.
+        for level, _, line_number, message in checks.get(check_name, []):
+            # line_number is None when compile has no line to point at (a
+            # missing labelled line or section).
+            problems.append({"check": check_name, "level": level,
+                             "line": line_number, "message": message})
+    return problems
+
+
+def finding_needs_entry(root, relative):
+    """Return what one finding still needs, as compile.py sees its saved file.
+
+    A dict with path, id, title, status, summary and problems, or with path
+    and error if the file is refused or can't be read. None if the name
+    isn't a regular file: a folder, a FIFO or a dangling link named F-x.md,
+    which compile.py skips too, or a link loop, skipped here on every
+    Python (compile.py on 3.9 stops with a RuntimeError instead).
+    """
+    try:
+        relative.encode("utf-8")
+    except UnicodeEncodeError:
+        # A Linux name with a byte that isn't UTF-8 can't be sent as JSON;
+        # repr() makes it plain text.
+        return {"path": repr(relative), "error": "file name isn't UTF-8"}
+    try:
+        resolved = readable_path(root, relative)
+        # The path check first; is_file() follows a link, so only after it.
+        if not resolved.is_file():
+            return None
+        text = compile.read_markdown(resolved)
+    except RuntimeError:
+        # Python 3.9's resolve() raises this for a link loop; newer Pythons
+        # resolve it and is_file() says False. Either way it is a broken
+        # link, skipped like a dangling one.
+        return None
+    except (compile.RootError, compile.InputError, OSError) as error:
+        # Shown on its own entry, so one bad file never hides the others
+        # (compile.py stops its whole run instead; N9 default C).
+        return {"path": relative, "error": str(error)}
+    # Draft mode, as the notebook's Compile runs it. check_finding() is
+    # compile's own per-finding QA, so the notebook keeps no copy of a rule.
+    checked = compile.check_finding(relative, text, False)
+    return {"path": relative, "id": checked["heading"]["id"],
+            "title": checked["heading"]["title"], "status": checked["status"],
+            "summary": checked["summary"], "problems": needs_problems(checked["checks"])}
+
+
+def finding_needs(root):
+    """Return {"findings": [...], "error": ...} for the Finding needs tab.
+
+    findings holds one finding_needs_entry() per findings/F-*.md, by path.
+    error is None, or a message if findings/ itself can't be read, so that
+    shows as an error, never as an empty list. Reads the disk on every
+    call and writes nothing; it never calls compile.run(), so build/ is
+    left alone.
+    """
+    try:
+        names = needs_file_names(root)
+    except (compile.RootError, OSError) as error:
+        return {"findings": [], "error": str(error)}
+    findings = []
+    for name in names:
+        entry = finding_needs_entry(root, NEEDS_FOLDER + "/" + name)
+        if entry is not None:
+            findings.append(entry)
+    return {"findings": findings, "error": None}
+
+
+def send_finding_needs(handler):
+    """GET /finding-needs: finding_needs() for the working copy, as JSON.
+
+    It has no ?path or other selector: the scope is always the person's
+    own findings/, so a request can't widen it. Any query is ignored. A
+    GET changes nothing (Constraint 8), and this one never compiles.
+    """
+    send_json(handler, 200, finding_needs(handler.server.settings["root"]))
+
+
 # Export (b): one Markdown file of the person's findings and notes, for
 # pasting over RDP when no file transfer works. The notes come after the
 # findings in this order of prefixes, each group by filename (OQ-10).
@@ -2601,6 +2715,8 @@ pre { margin: 0; min-height: 1.2em; white-space: pre-wrap; overflow-wrap: anywhe
 #file-list button { margin-bottom: 0; max-width: 100%; overflow-wrap: anywhere; }
 /* The file just created, so it can be found in the list. */
 #file-list .selected { font-weight: bold; }
+/* The Compile tab showing. */
+.tabs .selected { font-weight: bold; }
 form div, main > div { margin-bottom: 0.5rem; }
 /* A NOTE in the fill-in view: bold, not the browser's yellow. */
 mark { background: none; color: inherit; font-weight: bold; }
@@ -3100,10 +3216,34 @@ function showCombinedExport() {
   });
 }
 
+/* Which Compile tab the Compile button opens: the last one shown, so
+   coming back from a finding opened in Finding needs shows Finding needs
+   again, read fresh. */
+var compileTab = showCompile;
+
+/* Empty the main pane and put the Compile pane's two tabs at its top
+   (NQ-01 A): Compile and Finding needs. current is the one showing. */
+function showCompileTabs(current) {
+  compileTab = current;
+  main.textContent = "";
+  var tabs = main.appendChild(element("div"));
+  tabs.className = "tabs";
+  [["Compile", showCompile], ["Finding needs", showFindingNeeds]].forEach(function (tab) {
+    var button = tabs.appendChild(element("button", tab[0]));
+    button.type = "button";
+    if (tab[1] === current) {
+      button.className = "selected";
+    }
+    /* No file is open in the Compile pane, so there is nothing for
+       goTo() to check here. */
+    button.addEventListener("click", tab[1]);
+  });
+}
+
 /* The Compile view (Compile): runs compile.py on the working copy, in
    draft mode, and shows what it says. */
 function showCompile() {
-  main.textContent = "";
+  showCompileTabs(showCompile);
   main.appendChild(element("h2", "Compile"));
   main.appendChild(element("p", "Runs compile.py on your working copy in draft mode: it " +
     "rewrites the four files in build/ and shows the QA report. It never changes report.md. " +
@@ -3154,6 +3294,130 @@ function showCompile() {
       notRun("Not compiled: " + error);
     });
   });
+}
+
+/* The Finding needs tab (Features 6): what each of your own findings still
+   needs, from compile.py's own checks on the saved file (GET
+   /finding-needs). It is read fresh each time the tab is shown and on
+   Refresh; it never runs compile and writes nothing. A save can't happen
+   while it shows (the fill-in view takes the main pane), so the next
+   showing is what picks a save up (N9 default E). */
+function showFindingNeeds() {
+  showCompileTabs(showFindingNeeds);
+  main.appendChild(element("h2", "Finding needs"));
+  main.appendChild(element("p", "What each finding in findings/ still needs, from compile.py's " +
+    "own checks on the saved file on disk. Changes not saved yet are not included. " +
+    "It doesn't run compile or change any file."));
+  main.appendChild(element("p", "READY only means no markers are left, the six required fields " +
+    "have values, and there is a severity word and a title. A READY finding with problems listed " +
+    "is not report-ready. Not checked here: duplicate finding IDs, the findings index and the " +
+    "interactions timeline (use the Compile tab), report.md (run compile.py --final in a " +
+    "terminal), and whether your evidence proves the finding (no tool checks that)."));
+  var refresh = element("button", "Refresh");
+  refresh.type = "button";
+  main.appendChild(element("div")).appendChild(refresh);
+  var results = main.appendChild(element("div"));
+
+  function load() {
+    /* Locked until the answer. The old results go first, so a failed
+       refresh never leaves them looking current. */
+    refresh.disabled = true;
+    results.textContent = "";
+    results.appendChild(element("p", "Checking..."));
+    /* A late answer, after another view has replaced this one, is dropped
+       so it can't take over the main pane. */
+    function stillShown() {
+      return main.contains(results);
+    }
+    function notChecked(text) {
+      if (!stillShown()) {
+        return;
+      }
+      refresh.disabled = false;
+      results.textContent = "";
+      markError(results.appendChild(element("p", "Not checked: " + text)));
+    }
+    fetch("/finding-needs").then(function (response) {
+      if (!response.ok) {
+        return response.text().then(notChecked);
+      }
+      return response.json().then(function (data) {
+        if (!stillShown()) {
+          return;
+        }
+        refresh.disabled = false;
+        results.textContent = "";
+        showNeeds(results, data);
+      });
+    }).catch(function (error) {
+      notChecked("the notebook isn't answering: " + error);
+    });
+  }
+  refresh.addEventListener("click", load);
+  load();
+}
+
+/* GET /finding-needs's answer, into results: an error with findings/
+   itself, "no findings", or one block per finding. */
+function showNeeds(results, data) {
+  results.appendChild(element("p", "Checked at " + new Date().toLocaleTimeString() +
+    ", from the saved files on disk."));
+  if (data.error !== null) {
+    markError(results.appendChild(element("p", "Can't read findings/: " + data.error)));
+    return;
+  }
+  if (data.findings.length === 0) {
+    results.appendChild(element("p", "No findings in findings/ yet."));
+    return;
+  }
+  data.findings.forEach(function (entry) {
+    results.appendChild(needsEntry(entry));
+  });
+}
+
+/* One finding's block: its path, ID and title, its readiness, then its
+   other QA problems, each with its line when compile gives one. */
+function needsEntry(entry) {
+  var block = element("div");
+  block.appendChild(element("h3", entry.path));
+  if (entry.error !== undefined) {
+    /* One bad file is shown here and never hides the others (N9 default C). */
+    markError(block.appendChild(element("p", "Not checked: " + entry.error)));
+    return block;
+  }
+  block.appendChild(element("p", (entry.id === null ? "no ID" : entry.id) + ": " +
+    (entry.title ? entry.title : "no title")));
+  var readiness = block.appendChild(element("p"));
+  if (entry.status === "READY" && entry.problems.length === 0) {
+    readiness.textContent = "READY, and no problems in these checks.";
+    markOk(readiness);
+  } else if (entry.status === "READY") {
+    /* READY alone is not report-ready (N9-00), so this looks different. */
+    readiness.textContent = "READY, but not report-ready: " + entry.problems.length +
+      " problems below.";
+    markWarning(readiness);
+  } else {
+    readiness.textContent = entry.summary;
+    markWarning(readiness);
+  }
+  if (entry.problems.length > 0) {
+    block.appendChild(element("p", "QA problems:"));
+    entry.problems.forEach(function (problem) {
+      var where = problem.line === null ? "" : "line " + problem.line + ": ";
+      block.appendChild(element("pre", where + problem.message + " (" + problem.check + ")"));
+    });
+  }
+  /* The same way the file list opens it, so the fill-in view's own
+     guards and save refusals apply. */
+  var open = element("button", "Open " + entry.path);
+  open.type = "button";
+  open.addEventListener("click", function () {
+    goTo(function () {
+      getJson("/file?path=" + encodeURIComponent(entry.path), showFillIn);
+    });
+  });
+  block.appendChild(element("div")).appendChild(open);
+  return block;
 }
 
 /* The Logs view: the log folder's files, newest first (GET /logs). */
@@ -3784,7 +4048,9 @@ document.getElementById("export-button").addEventListener("click", function () {
 });
 
 document.getElementById("compile-button").addEventListener("click", function () {
-  goTo(showCompile);
+  goTo(function () {
+    compileTab();
+  });
 });
 
 loadFiles();
@@ -3803,7 +4069,8 @@ GET_ROUTES = {"/": send_page,
               "/new-data": send_new_data,
               "/file": send_editable_file,
               "/logs": send_log_list,
-              "/log": send_log}
+              "/log": send_log,
+              "/finding-needs": send_finding_needs}
 POST_ROUTES = {"/checklist-state": save_tick,
                "/new-file": save_new_file,
                "/file": save_file,

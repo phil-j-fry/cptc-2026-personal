@@ -19,7 +19,7 @@ This is the one README for the team's tools and scripts: `tools/compile.py`, `to
 | `scripts/pull.sh` | The report writer's pull of every teammate's work into `incoming/<name>/`. Needs `ssh`, `ssh-keygen`, `ssh-copy-id` and `rsync` | Built |
 | `scripts/logged-shell.sh` | Records every terminal session, with a one-line-per-command index. Needs util-linux `script` (default on Kali/Debian) | Built. Walkthrough: `scripts/logged-shell.md` |
 | `tools/compile.py` | Assembles everyone's findings into report-ready Markdown and checks them for QA problems | Built (accepted at milestone M2, 2026-10-21) |
-| `tools/notebook.py` | A local web page for the checklists, your own files, new files from the templates, filling them in, the logs, a zip export, a compile button and a combined Markdown export | Built |
+| `tools/notebook.py` | A local web page for the checklists, your own files, new files from the templates, filling them in, the logs, a zip export, a compile button (with a Finding needs tab) and a combined Markdown export | Built |
 | `tools/tests/` | Unit tests: `python3 -m unittest discover tools/tests` | Built |
 
 Design docs and function-by-function walkthroughs are in the public app repo, https://github.com/phil-j-fry/cptc-2026-personal (`tools/`).
@@ -341,7 +341,7 @@ report.md NOT FOUND: report not checked
 
 ## Checklists and your files in your browser: `tools/notebook.py`
 
-A page on your own box for the checklists, your own files, new files, filling them in, the logs, a zip export, a compile button and a combined Markdown export. Start it from inside `~/cptc-work`:
+A page on your own box for the checklists, your own files, new files, filling them in, the logs, a zip export, a compile button (with a Finding needs tab) and a combined Markdown export. Start it from inside `~/cptc-work`:
 
 ```
 python3 tools/notebook.py --name <yourname> [--root ~/cptc-work] [--port 8765]
@@ -364,7 +364,7 @@ Then open the address it prints (`Notebook: http://127.0.0.1:8765` by default). 
 - **Export:** one zip, `cptc-export-<name>-<timestamp>.zip`, saved in the working copy and laid out so unzipping it inside the report writer's `incoming/<name>/` gives the same mirror an `rsync` pull would (option 3 in the comp repo `README.md` → "Getting files to the report writer"). Logs go in only if "Include logs" is ticked (off by default).
 - **Light / dark:** follows your system's setting; the button swaps it. Plain black and white with one grey; messages and warnings sit in a bordered block.
 
-**Also built:** a compile button and a combined Markdown export; their descriptions here are still to be added.
+**Also built:** a compile button (with its Finding needs tab) and a combined Markdown export; their descriptions here are still to be added.
 
 ## Picking up a tool fix mid-event
 
@@ -413,7 +413,7 @@ Checks a teammate runs by hand on their own Kali VM, never in `~/cptc-work`: aft
 
 #### `notebook.py`
 
-Covers start-up, the page, checklists, your own files and New file. The fill-in view, autosave, logs, export, the compile button and the combined Markdown export are built, but their items are still to be added here.
+Covers start-up, the page, checklists, your own files and New file. The fill-in view, autosave, logs, export, the compile button (with its Finding needs tab) and the combined Markdown export are built, but their items are still to be added here.
 
 **Setup:** step 1 of "Example: a practice run" above makes `~/cptc-practice`. In one terminal, from inside it, start the notebook on a spare port so it can't clash with a real one: `python3 tools/notebook.py --name alice --root ~/cptc-practice --port 8766`. Open `http://127.0.0.1:8766` in Firefox on the same box. Run the commands below in a second terminal, also from inside `~/cptc-practice`. Any item that adds a file removes it again at its end. When you're done, stop the notebook with Ctrl+C (it prints `Notebook stopped.`) and clean up with step 5 of the example.
 
@@ -485,4 +485,4 @@ Answers for what is built today (see "What it does today" above).
 - **"Can logs with secrets leak through it?"** Our terminal logs (`~/cptc-logs/`, or `$LOGDIR`) can hold secrets: passwords, hashes and tokens typed or printed during the test. The Logs view shows them read-only, only on `127.0.0.1` with no outbound connections, and the notebook never writes into the log folder. Export leaves logs out unless "Include logs" is ticked (off by default), and copying a log into `evidence/` copies it unchanged, secrets included. Redact secrets before any log text goes into a finding or the report.
 - **"Does it run commands?"** No. Nothing in it starts another program, and a test reads its source to check that it doesn't import subprocess and never uses os.system, os.popen, exec or eval.
 - **"Can it change a teammate's files?"** No. Teammates' copies in `incoming/<name>/` are never listed, and every write refuses a path inside `incoming/` (rule R18) or the log folder. It also refuses a folder or file whose link points outside the working copy, and it refuses to start in the git clone.
-- **"What's built, and what isn't?"** Built: the checklists, the list of your own files, New file, the fill-in view with autosave, the log viewer, export (one zip, and a combined Markdown file as a fallback) and the compile button. The compile button runs draft mode only; for the `--final` check, use `compile.py` from the terminal.
+- **"What's built, and what isn't?"** Built: the checklists, the list of your own files, New file, the fill-in view with autosave, the log viewer, export (one zip, and a combined Markdown file as a fallback) and the compile button, whose Finding needs tab shows what each of your own findings still needs without running compile. The compile button runs draft mode only; for the `--final` check, use `compile.py` from the terminal.
